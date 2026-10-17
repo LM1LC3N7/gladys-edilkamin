@@ -11,6 +11,12 @@ Gladys through
 [`@gladysassistant/integration-sdk`](https://github.com/GladysAssistant/integration-sdk-js),
 its only runtime dependency. It started from the official JavaScript template.
 
+It brings the Edilkamin "The Mind" pellet stoves into Gladys through the
+Edilkamin cloud (unofficial API, ported from edilkamin.py, MIT). A pellet
+stove is a flame appliance: read `TODO.md` "Decisions" before touching a
+command (no switch, turning off always allowed, lighting behind
+`allow_power_on`, a fresh read before acting, the 3.5 s deadline).
+
 ## Commands
 
 ```bash
@@ -31,16 +37,19 @@ pushing.
 ## Architecture
 
 ```
-index.js                          SDK wiring only: handlers registered before connect()
-src/devices/index.js              registry of the device blueprints + dispatch helpers
-src/devices/<type>.js             one device type per file (buildDevice, onPoll, onSetValue...)
-src/scenes.js                     scene action handlers (manifest `scene_actions`)
-src/widgets.js                    dashboard widget handlers (manifest `widgets`)
-src/config.js                     DEFAULT_CONFIG (mirrors the manifest defaults) + normalization
-src/weather.js                    example driver (Open-Meteo)
+index.js                          SDK wiring only (src/handlers.js registers before connect())
+src/handlers.js                   the SDK handlers -> EdilkaminApp (shared with the tests)
+src/app.js                        EdilkaminApp: polling, stops/pauses, commands and their safety
+src/client.js                     the Edilkamin API (info, mqtt/command) and the token renewal
+src/cognito.js, src/srp.js        AWS Cognito SRP sign-in and refresh (pycognito port)
+src/edilkamin.js                  stove document: gzip Buffers, checked values (pure)
+src/devices.js                    -> Gladys devices and states (pure)
+src/store.js                      /data: tokens, pauses, stops
+src/publisher.js                  states and scene events within the Gladys limits
+src/config.js                     DEFAULTS (mirror the manifest defaults) + normalization
 gladys-assistant-integration.json manifest: name, config_schema, actions, image...
 docs/en.md, docs/fr.md            user documentation, re-hosted by Gladys (mandatory)
-test/                             node --test, against the SDK's fake Gladys (integration-sdk/testing)
+test/                             node --test, the SDK's fake Gladys + a fake Edilkamin cloud
 .github/scripts/release.mjs       release helpers (manifest bump, changelog), tested in test/
 ```
 

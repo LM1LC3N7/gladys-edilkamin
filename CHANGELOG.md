@@ -12,44 +12,32 @@ the notes of the version's GitHub Release.
 
 ### Added
 
-- A working example of scene triggers, scene actions and dashboard widgets
-  (Gladys 5.1.0 or later).
-- `CHANGELOG.md`, rolled by the Release workflow.
-- A GitHub Release for every version, with its changelog section as notes: the
-  Gladys Supervision page links each version to the repository's releases.
-- CI runs the tests on Node 22 and 24, and builds the Docker image.
-- Dependabot keeps the npm dependencies and the GitHub Actions up to date.
-- `SECURITY.md` (how to report a vulnerability) and `CLAUDE.md` (project rules
-  for contributors and coding assistants).
-- Manifest tests: `version` matches `package.json`, `docker_image` is tagged
-  with it, descriptions hold 10 to 100 characters, placeholders are
-  multi-language objects.
-- The latitude and longitude fields show an example value as placeholder.
+- Edilkamin "The Mind" pellet stoves, through the Edilkamin cloud (unofficial
+  API, ported from edilkamin.py), from their MAC addresses (10 at most).
+- Sign-in with the user name and the password through AWS Cognito SRP (the
+  password itself is never sent); the token is renewed from the refresh
+  token by a timer, without a new sign-in at each read; the tokens are kept
+  in `/data` so a restart does not sign in again.
+- On/off state (read only), room temperature, setpoint, power level (P1 to
+  P5), fans, pellet reserve, last alarm (when the stove document has an alarm
+  log).
+- "Light the stove" and "Turn the stove off" buttons: turning off is always
+  allowed and never waits; lighting is off by default (`allow_power_on`). No
+  switch, so an "everything on" never lights a stove.
+- Setpoint (12 to 30 °C, half degrees) and power level from Gladys, off by
+  default (`allow_commands`).
+- Every command reads the stove again just before acting and is refused when
+  it cannot be sent within 3.5 s of its arrival; lighting, the setpoint and
+  the power level are refused when that read fails or lacks the value, and run
+  one at a time per stove; a guard after a power command (60 s at most).
+- Scene trigger "Edilkamin stove alarm" (stove name, alarm code).
+- The stoves are read every 60 s (60 to 900); refused credentials stop the
+  integration with a new try after 1 h, 6 h, then every 24 h; a verification
+  code asked stops it for good until the user acts; a 429 pauses every path
+  but turning off for 60 s to 6 h, kept across restarts; a 403 on every stove
+  pauses 30 minutes; one unreadable stove only gets a degraded badge.
+- "Test the connection" button; the status and the Discovery list are sent
+  again at each reconnection to Gladys.
+- Feature names and texts in French or English.
 
-### Changed
-
-- Node.js 22 or later is required (Node 20 is end-of-life).
-- Integration SDK 0.15.0. The tests now run against the fake Gladys of the
-  SDK, which refuses the payloads Gladys refuses.
-- The refresh interval is one minute minimum, the fastest Gladys polls a
-  device. The plug's power is only sent when it changes, and every 30
-  minutes otherwise.
-
-### Fixed
-
-- Gladys refused the devices of the Discovery tab: the weather station and
-  the plug declared their poll frequency in seconds instead of one of the
-  values Gladys accepts, and were never polled. They now poll every minute,
-  and the readings follow the refresh interval of the configuration.
-
-- The release commit no longer fails `npm run format:check`: the Release
-  workflow updates the manifest `version` and `docker_image` in place instead
-  of re-printing the whole file with `jq`.
-- The integration can write to `/data`: the image creates the directory owned
-  by the `node` user, a new Docker volume was owned by root.
-- A sub-container running the integration's own image follows it to the new
-  tag at each release, as well as in the manifest of the build summary: it kept
-  the previous tag, which may not exist on the registry. Sub-containers on a
-  third-party image (a broker, a database...) keep theirs.
-
-[Unreleased]: https://github.com/GladysAssistant/integration-template-js/commits/main
+[Unreleased]: https://github.com/LM1LC3N7/gladys-edilkamin/commits/main

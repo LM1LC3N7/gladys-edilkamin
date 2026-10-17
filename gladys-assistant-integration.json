@@ -1,177 +1,211 @@
 {
   "manifest_version": 1,
   "type": "device",
-  "name": "Demo Devices Template",
+  "name": "Edilkamin",
   "description": {
-    "en": "Starter template showing sensors, a switch, a dimmable light and a smart plug.",
-    "fr": "Template de démarrage : capteurs, interrupteur, lampe variable et prise connectée."
+    "en": "Edilkamin \"The Mind\" pellet stoves via the Edilkamin cloud: state, temperature, alarms.",
+    "fr": "Poêles à granulés Edilkamin « The Mind » par le cloud Edilkamin : état, température, alarmes."
   },
-  "version": "1.0.0",
-  "docker_image": "ghcr.io/gladysassistant/integration-template-js:1.0.0",
+  "version": "0.1.0",
+  "docker_image": "ghcr.io/lm1lc3n7/gladys-edilkamin:0.1.0",
   "gladys_version": ">=5.1.0",
-  "cover_image": "https://raw.githubusercontent.com/GladysAssistant/integration-template-js/master/cover.png",
-  "categories": ["lighting", "security", "environment"],
-  "transports": ["local", "cloud"],
+  "cover_image": "https://raw.githubusercontent.com/LM1LC3N7/gladys-edilkamin/main/cover.png",
+  "categories": ["climate"],
+  "transports": ["cloud"],
   "config_schema": [
     {
       "key": "intro",
       "type": "section",
-      "label": { "en": "Getting started", "fr": "Pour commencer" },
+      "label": {
+        "en": "Your Edilkamin account",
+        "fr": "Votre compte Edilkamin"
+      },
       "description": {
-        "en": "The demo weather station reads real data from the free Open-Meteo API: pick the coordinates to observe. No account, no API key.",
-        "fr": "La station météo de démonstration lit de vraies données via l'API gratuite Open-Meteo : choisissez les coordonnées à observer. Pas de compte, pas de clé d'API."
+        "en": "Brings the Edilkamin pellet stoves of your \"The Mind\" account into Gladys: on or off, room temperature, setpoint, power level, fans, pellets in reserve, last alarm, and a scene trigger on a new alarm. Read every minute through the Edilkamin cloud. Enter the user name and the password of The Mind app and the MAC address of each stove, save, then add the stoves from the Discovery tab. Turning a stove off from Gladys is always allowed; lighting it, and changing its setpoint or power level, stay off until you allow them below. Unofficial API, never tested with a real stove or account. Not affiliated with Edilkamin.",
+        "fr": "Amène dans Gladys les poêles à granulés Edilkamin de votre compte « The Mind » : allumé ou éteint, température ambiante, consigne, puissance, ventilation, granulés en réserve, dernière alarme, et un déclencheur de scène sur une nouvelle alarme. Lecture chaque minute par le cloud Edilkamin. Saisissez l'identifiant et le mot de passe de l'application The Mind et l'adresse MAC de chaque poêle, enregistrez, puis ajoutez les poêles depuis l'onglet Découverte. L'extinction depuis Gladys est toujours permise ; l'allumage, la consigne et la puissance restent désactivés tant que vous ne les autorisez pas ci-dessous. API non officielle, jamais testée avec un vrai poêle ni un vrai compte. Sans lien avec Edilkamin."
       },
       "links": [
         {
-          "url": "https://open-meteo.com/en/docs",
-          "label": { "en": "Open-Meteo documentation", "fr": "Documentation Open-Meteo" }
+          "url": "https://github.com/LM1LC3N7/gladys-edilkamin/blob/main/docs/fr.md",
+          "label": {
+            "en": "Guide (French)",
+            "fr": "Guide (français)"
+          }
+        },
+        {
+          "url": "https://github.com/LM1LC3N7/gladys-edilkamin/blob/main/docs/en.md",
+          "label": {
+            "en": "Guide (English)",
+            "fr": "Guide (anglais)"
+          }
         }
       ]
     },
     {
-      "key": "latitude",
-      "type": "number",
-      "label": { "en": "Latitude", "fr": "Latitude" },
-      "description": {
-        "en": "Latitude used for the demo weather sensor.",
-        "fr": "Latitude utilisée par le capteur météo de démonstration."
+      "key": "username",
+      "type": "string",
+      "label": {
+        "en": "Edilkamin user name (e-mail)",
+        "fr": "Identifiant Edilkamin (e-mail)"
       },
-      "placeholder": { "en": "e.g. 48.8566", "fr": "ex. 48.8566" },
-      "required": true,
-      "default": 48.8566,
-      "min": -90,
-      "max": 90
+      "description": {
+        "en": "The one you sign in to The Mind app with.",
+        "fr": "Celui avec lequel vous vous connectez à l'application The Mind."
+      },
+      "placeholder": {
+        "en": "you@example.com",
+        "fr": "vous@exemple.fr"
+      },
+      "required": true
     },
     {
-      "key": "longitude",
-      "type": "number",
-      "label": { "en": "Longitude", "fr": "Longitude" },
-      "description": {
-        "en": "Longitude used for the demo weather sensor.",
-        "fr": "Longitude utilisée par le capteur météo de démonstration."
+      "key": "password",
+      "type": "secret",
+      "label": {
+        "en": "Edilkamin password",
+        "fr": "Mot de passe Edilkamin"
       },
-      "placeholder": { "en": "e.g. 2.3522", "fr": "ex. 2.3522" },
-      "required": true,
-      "default": 2.3522,
-      "min": -180,
-      "max": 180
+      "description": {
+        "en": "Kept by Gladys in its database, never shown again, used only to sign in to Edilkamin (AWS Cognito SRP: the password itself is never sent).",
+        "fr": "Gardé par Gladys dans sa base, jamais réaffiché, utilisé seulement pour se connecter à Edilkamin (AWS Cognito SRP : le mot de passe lui-même n'est jamais envoyé)."
+      },
+      "required": true
     },
     {
-      "key": "unit",
-      "type": "select",
-      "label": { "en": "Temperature unit", "fr": "Unité de température" },
+      "key": "mac_addresses",
+      "type": "string",
+      "label": {
+        "en": "MAC addresses of the stoves",
+        "fr": "Adresses MAC des poêles"
+      },
+      "description": {
+        "en": "The MAC address of the Wi-Fi module of each stove, as The Mind app shows it, separated by commas (10 stoves at most). The cloud gives no list of the stoves of an account.",
+        "fr": "L'adresse MAC du module Wi-Fi de chaque poêle, telle que l'application The Mind l'affiche, séparées par des virgules (10 poêles au plus). Le cloud ne donne pas la liste des poêles d'un compte."
+      },
+      "placeholder": {
+        "en": "A8:03:2A:12:34:56, A8:03:2A:65:43:21",
+        "fr": "A8:03:2A:12:34:56, A8:03:2A:65:43:21"
+      },
+      "required": true
+    },
+    {
+      "key": "allow_power_on",
+      "type": "boolean",
+      "label": {
+        "en": "Allow lighting the stoves from Gladys",
+        "fr": "Autoriser l'allumage des poêles depuis Gladys"
+      },
+      "description": {
+        "en": "Off by default: Gladys can turn a stove off, never light it. On, the \"Light the stove\" button, a scene or a dashboard can light a flame in your home while nobody is there: check the stove, its glass and its surroundings first.",
+        "fr": "Désactivé par défaut : Gladys peut éteindre un poêle, jamais l'allumer. Activé, le bouton « Allumer le poêle », une scène ou un tableau de bord peut allumer une flamme chez vous en votre absence : vérifiez d'abord le poêle, sa vitre et ses abords."
+      },
       "required": false,
-      "default": "celsius",
-      "options": [
-        { "value": "celsius", "label": { "en": "Celsius", "fr": "Celsius" } },
-        { "value": "fahrenheit", "label": { "en": "Fahrenheit", "fr": "Fahrenheit" } }
-      ]
+      "default": false
     },
     {
-      "key": "poll_frequency",
-      "type": "number",
-      "label": { "en": "Refresh interval (s)", "fr": "Intervalle de rafraîchissement (s)" },
+      "key": "allow_commands",
+      "type": "boolean",
+      "label": {
+        "en": "Allow changing the setpoint and the power level from Gladys",
+        "fr": "Autoriser la consigne et la puissance depuis Gladys"
+      },
       "description": {
-        "en": "How often sensors are polled, in seconds (one minute minimum).",
-        "fr": "Fréquence d'interrogation des capteurs, en secondes (une minute minimum)."
+        "en": "Off by default: the setpoint and the power level are shown, not changed. They never light the stove.",
+        "fr": "Désactivé par défaut : la consigne et la puissance sont affichées, pas modifiées. Elles n'allument jamais le poêle."
       },
       "required": false,
-      "default": 300,
+      "default": false
+    },
+    {
+      "key": "poll_interval",
+      "type": "number",
+      "label": {
+        "en": "Refresh interval (s)",
+        "fr": "Intervalle de rafraîchissement (s)"
+      },
+      "description": {
+        "en": "Seconds between two reads of the stoves (60 to 900).",
+        "fr": "Secondes entre deux lectures des poêles (60 à 900)."
+      },
+      "required": false,
+      "default": 60,
       "min": 60,
-      "max": 3600
+      "max": 900
+    },
+    {
+      "key": "language",
+      "type": "select",
+      "label": {
+        "en": "Language of the feature names",
+        "fr": "Langue des noms des fonctionnalités"
+      },
+      "description": {
+        "en": "Used for the feature names of the stoves added from now on, and for the last alarm.",
+        "fr": "Sert aux noms des fonctionnalités des poêles ajoutés désormais, et à la dernière alarme."
+      },
+      "required": false,
+      "default": "fr",
+      "options": [
+        {
+          "value": "fr",
+          "label": {
+            "en": "French",
+            "fr": "Français"
+          }
+        },
+        {
+          "value": "en",
+          "label": {
+            "en": "English",
+            "fr": "Anglais"
+          }
+        }
+      ]
     }
   ],
   "actions": [
     {
-      "key": "test_weather",
-      "label": { "en": "Test the weather provider", "fr": "Tester le fournisseur météo" },
-      "timeout_seconds": 30
-    },
-    {
-      "key": "identify",
-      "label": { "en": "Identify a device", "fr": "Identifier un appareil" },
-      "fields": [
-        {
-          "key": "device",
-          "type": "select",
-          "source": "devices",
-          "label": { "en": "Device", "fr": "Appareil" },
-          "required": true
-        }
-      ]
+      "key": "test_connection",
+      "label": {
+        "en": "Test the connection",
+        "fr": "Tester la connexion"
+      },
+      "description": {
+        "en": "Signs in if needed and reads the stoves once. Also retries at once after a refusal.",
+        "fr": "Se connecte si besoin et lit une fois les poêles. Réessaie aussi aussitôt après un refus."
+      },
+      "timeout_seconds": 60
     }
   ],
   "scene_triggers": [
     {
-      "key": "motion_detected",
-      "label": { "en": "Motion detected", "fr": "Mouvement détecté" },
-      "description": {
-        "en": "A demo motion sensor saw a person or an animal move.",
-        "fr": "Un détecteur de démonstration a vu bouger une personne ou un animal."
+      "key": "stove_alarm",
+      "label": {
+        "en": "Edilkamin stove alarm",
+        "fr": "Alarme d'un poêle Edilkamin"
       },
-      "fields": [
-        {
-          "key": "device",
-          "type": "select",
-          "source": "devices",
-          "label": { "en": "Sensor", "fr": "Détecteur" }
-        },
-        {
-          "key": "target",
-          "type": "multi_select",
-          "label": { "en": "What moved", "fr": "Ce qui a bougé" },
-          "options": [
-            { "value": "person", "label": { "en": "Person", "fr": "Personne" } },
-            { "value": "animal", "label": { "en": "Animal", "fr": "Animal" } }
-          ]
-        }
-      ],
+      "description": {
+        "en": "When a read shows more alarms in the log of a stove than the previous read (every minute; only for stoves whose cloud document has an alarm log).",
+        "fr": "Quand une lecture montre plus d'alarmes dans le journal d'un poêle que la lecture précédente (chaque minute ; seulement pour les poêles dont le document du cloud a un journal d'alarmes)."
+      },
       "variables": [
         {
-          "key": "target",
+          "key": "stove",
           "type": "string",
-          "label": { "en": "What moved", "fr": "Ce qui a bougé" }
+          "label": {
+            "en": "Stove name",
+            "fr": "Nom du poêle"
+          }
+        },
+        {
+          "key": "code",
+          "type": "string",
+          "label": {
+            "en": "Alarm code (empty when unknown)",
+            "fr": "Code de l'alarme (vide si inconnu)"
+          }
         }
       ]
-    }
-  ],
-  "scene_actions": [
-    {
-      "key": "identify_device",
-      "label": { "en": "Identify a device", "fr": "Identifier un appareil" },
-      "description": {
-        "en": "Make a device signal itself (the demo light blinks).",
-        "fr": "Fait se signaler un appareil (la lampe de démonstration clignote)."
-      },
-      "timeout_seconds": 15,
-      "fields": [
-        {
-          "key": "device",
-          "type": "select",
-          "source": "devices",
-          "label": { "en": "Device", "fr": "Appareil" },
-          "required": true
-        }
-      ],
-      "outputs": [
-        {
-          "key": "signalled",
-          "type": "boolean",
-          "label": { "en": "Device signalled", "fr": "Appareil signalé" }
-        }
-      ]
-    }
-  ],
-  "widgets": [
-    {
-      "key": "demo_status",
-      "label": { "en": "Demo status", "fr": "État de la démo" },
-      "description": {
-        "en": "Live temperature and plug power, plug connection and observed location.",
-        "fr": "Température et puissance en direct, connexion de la prise, position observée."
-      },
-      "icon": "activity",
-      "action_timeout_seconds": 15
     }
   ]
 }
