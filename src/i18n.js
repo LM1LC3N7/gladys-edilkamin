@@ -100,17 +100,17 @@ export const T = {
       `Edilkamin a refusé l'identifiant ou le mot de passe (ou le compte). Vérifiez-les dans la configuration : enregistrer, ou le bouton de test, réessaie aussitôt ; sinon un nouvel essai dans ${wait.fr}.`,
     ),
   twoFactor: both(
-    'Edilkamin asks for a verification code, which this integration does not handle. It never signs in again by itself (each sign-in would send a code): save the configuration or click "Test the connection" to try again.',
-    "Edilkamin demande un code de vérification, que cette intégration ne gère pas. Elle ne se reconnecte jamais d'elle-même (chaque connexion enverrait un code) : enregistrez la configuration ou cliquez sur « Tester la connexion » pour réessayer.",
+    'Edilkamin asks for a verification code, which this integration does not handle. It never signs in again by itself (each sign-in would send a code): click "Test the connection", or change the user name or the password.',
+    "Edilkamin demande un code de vérification, que cette intégration ne gère pas. Elle ne se reconnecte jamais d'elle-même (chaque connexion enverrait un code) : cliquez sur « Tester la connexion », ou changez l'identifiant ou le mot de passe.",
   ),
   newPassword: both(
     'Edilkamin asks for a new password: choose it in The Mind app, then enter it here.',
     "Edilkamin demande un nouveau mot de passe : choisissez-le dans l'application The Mind, puis saisissez-le ici.",
   ),
-  unsupportedChallenge: (name, wait) =>
+  unsupportedChallenge: (name) =>
     both(
-      `Edilkamin asks for a sign-in step this integration does not handle (${name ?? 'unknown'}). One new try in ${wait.en}, or at once when you save the configuration or click "Test the connection".`,
-      `Edilkamin demande une étape de connexion que cette intégration ne gère pas (${name ?? 'inconnue'}). Un nouvel essai dans ${wait.fr}, ou aussitôt quand vous enregistrez la configuration ou cliquez sur « Tester la connexion ».`,
+      `Edilkamin asks for a sign-in step this integration does not handle (${name ?? 'unknown'}). It never tries again by itself: click "Test the connection", or change the user name or the password.`,
+      `Edilkamin demande une étape de connexion que cette intégration ne gère pas (${name ?? 'inconnue'}). Elle ne réessaie jamais d'elle-même : cliquez sur « Tester la connexion », ou changez l'identifiant ou le mot de passe.`,
     ),
   sessionRefused: (wait) =>
     both(
@@ -119,8 +119,8 @@ export const T = {
     ),
   unreachable: (reason, wait) =>
     both(
-      `Edilkamin cannot be reached (${reason}). Next try in ${wait.en}.`,
-      `Edilkamin est injoignable (${reason}). Nouvel essai dans ${wait.fr}.`,
+      `Edilkamin cannot be reached (${reason.en}). Next try in ${wait.en}.`,
+      `Edilkamin est injoignable (${reason.fr}). Nouvel essai dans ${wait.fr}.`,
     ),
   rateLimited: (wait) =>
     both(
@@ -132,6 +132,14 @@ export const T = {
       `Edilkamin refuses the requests (HTTP 403): pausing for ${wait.en}.`,
       `Edilkamin refuse les requêtes (HTTP 403) : pause de ${wait.fr}.`,
     ),
+  checkMac: both(
+    'Check the MAC address of the stove in the configuration (The Mind app).',
+    "Vérifiez l'adresse MAC du poêle dans la configuration (application The Mind).",
+  ),
+  stoveNoAnswer: both(
+    'Edilkamin did not answer for this stove at the last read (an error or a timeout of the cloud).',
+    "Edilkamin n'a pas répondu pour ce poêle à la dernière lecture (erreur ou délai dépassé du cloud).",
+  ),
   stoveUnreadable: both(
     'This stove could not be read (unknown MAC address, not in this account, or a bad answer).',
     "Ce poêle n'a pas pu être lu (adresse MAC inconnue, absente de ce compte, ou réponse invalide).",
@@ -205,6 +213,10 @@ export const T = {
       'The stove did not report whether it is on: command refused.',
       "Le poêle n'a pas indiqué s'il est allumé : commande refusée.",
     ),
+    offMeanwhile: both(
+      'A turn off of this stove was asked meanwhile: lighting refused.',
+      'Extinction demandée entre-temps : allumage refusé.',
+    ),
     late: both(
       'Edilkamin answered too late: command refused before acting (nothing was sent).',
       "Edilkamin a répondu trop tard : commande refusée avant d'agir (rien n'a été envoyé).",
@@ -212,12 +224,34 @@ export const T = {
   },
   maybeSent: (reason) =>
     both(
-      `The command may have reached Edilkamin, but it did not confirm it (${reason}). Check the state of the stove.`,
-      `La commande a pu atteindre Edilkamin, mais il ne l'a pas confirmée (${reason}). Vérifiez l'état du poêle.`,
+      `The command may have reached Edilkamin, but it did not confirm it (${reason.en}). Check the state of the stove.`,
+      `La commande a pu atteindre Edilkamin, mais il ne l'a pas confirmée (${reason.fr}). Vérifiez l'état du poêle.`,
     ),
   commandFailed: (reason) =>
     both(
-      `Edilkamin refused the command (${reason}).`,
-      `Edilkamin a refusé la commande (${reason}).`,
+      `Edilkamin refused the command (${reason.en}).`,
+      `Edilkamin a refusé la commande (${reason.fr}).`,
     ),
 };
+
+/** The reason of an error, by kind, in both languages (never an English text in French). */
+const REASONS = {
+  network: both('network error', 'erreur réseau'),
+  timeout: both('no answer in time', 'pas de réponse à temps'),
+  unavailable: both('Edilkamin unavailable', 'Edilkamin indisponible'),
+  bad_response: both('unexpected answer', 'réponse inattendue'),
+  size: both('answer too large', 'réponse trop grande'),
+  not_found: both('not found', 'introuvable'),
+  forbidden: both('refused', 'refusé'),
+  rate_limited: both('too many requests', 'trop de requêtes'),
+  unauthorized: both('session refused', 'session refusée'),
+  session_refused: both('session refused', 'session refusée'),
+  http: both('request failed', 'requête en échec'),
+};
+
+/** `{ en, fr }`: the reason of an error, with its HTTP status when there is one. */
+export function reasonOf(err) {
+  const reason = REASONS[err?.kind] ?? both('error', 'erreur');
+  const status = Number.isInteger(err?.status) ? `, HTTP ${err.status}` : '';
+  return both(`${reason.en}${status}`, `${reason.fr}${status}`);
+}

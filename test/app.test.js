@@ -247,24 +247,17 @@ test('lighting is off by default: refused, nothing sent; turning off is always a
   const before = server.reads(MACS.cabin).length;
   const off = await press(gladys, MACS.cabin, 'power-off');
   assert.equal(off.success, true, off.error);
-  assert.equal(server.reads(MACS.cabin).length, before + 1, 'read again just before acting');
+  assert.equal(server.reads(MACS.cabin).length, before, 'turning off decides nothing: no read');
   assert.deepEqual(server.commands(), [{ mac_address: MACS.cabin, name: 'power', value: 0 }]);
   assert.equal(server.stoves[MACS.cabin].power, 0);
 });
 
-test('turning off an already-off stove sends nothing; a failed read never stops turning off', async (t) => {
+test('turning off is always sent, never answered "already off"', async (t) => {
   const { gladys, server } = await setup(t);
   const ack = await press(gladys, MACS.living, 'power-off');
   assert.equal(ack.success, true, ack.error);
-  assert.deepEqual(server.commands(), [], 'already off');
-
-  server.queue.push({
-    match: (r) => r.path === `/device/${MACS.cabin}/info`,
-    throws: new EdilkaminError('network', 'connection reset'),
-  });
-  const off = await press(gladys, MACS.cabin, 'power-off');
-  assert.equal(off.success, true, off.error);
-  assert.deepEqual(server.commands(), [{ mac_address: MACS.cabin, name: 'power', value: 0 }]);
+  assert.deepEqual(server.commands(), [{ mac_address: MACS.living, name: 'power', value: 0 }]);
+  assert.equal(server.stoves[MACS.living].power, 0);
 });
 
 test('lighting, when allowed: fresh read, one command, a guard until a later read', async (t) => {
@@ -297,7 +290,6 @@ test('lighting is refused when the read fails or does not say whether it is on',
   assert.equal(ack.success, false);
   assert.match(ack.error, /n'a pas pu être relu/);
 
-  delete server.stoves[MACS.living].power;
   server.stoves[MACS.living].power = 'unknown';
   const unknown = await press(gladys, MACS.living, 'power-on');
   assert.equal(unknown.success, false);
@@ -317,21 +309,131 @@ test('a command that cannot be sent within 3.5 s is refused, nothing sent', asyn
   assert.deepEqual(server.commands(), []);
 });
 
-test('turning off never waits behind a slow lighting of the same stove', async (t) => {
+/** Holds the next request matching `match` until `release()`. */
+function hold(server, match) {
+  const gate = {};
+  gate.done = new Promise((resolve) => (gate.release = resolve));
+  server.queue.push({ match, before: () => gate.done });
+  return gate;
+}
+const readOf = (mac) => (r) => r.path === `/device/${mac}/info`;
+const putOf = (name) => (r) => r.method === 'PUT' && r.body?.name === name;
+
+test('scenario A: a lighting queued behind a setpoint, then a turn off: the stove ends off', async (t) => {
   const { gladys, server } = await setup(t, { config: allowAll });
-  let release;
-  server.queue.push({
-    match: (r) => r.path === `/device/${MACS.living}/info`,
-    before: () => new Promise((resolve) => (release = resolve)),
-  });
+  const gate = hold(server, readOf(MACS.living));
+  const setpoint = press(gladys, MACS.living, 'setpoint', 22);
+  await settle();
   const on = press(gladys, MACS.living, 'power-on');
   await settle();
-  server.stoves[MACS.living].power = 1;
   const off = await press(gladys, MACS.living, 'power-off');
   assert.equal(off.success, true, off.error);
+  gate.release();
+  assert.equal((await setpoint).success, true);
+  const lighting = await on;
+  assert.equal(lighting.success, false);
+  assert.match(lighting.error, /Extinction demandée entre-temps/);
+  assert.deepEqual(
+    server.commands().map((c) => [c.name, c.value]),
+    [
+      ['power', 0],
+      ['enviroment_1_temperature', 22],
+    ],
+  );
+  assert.equal(server.stoves[MACS.living].power, 0);
+});
+
+test('scenario B: a turn off during the read of a lighting: the lighting is refused', async (t) => {
+  const { gladys, server } = await setup(t, { config: allowAll });
+  const gate = hold(server, readOf(MACS.living));
+  const on = press(gladys, MACS.living, 'power-on');
+  await settle();
+  const off = await press(gladys, MACS.living, 'power-off');
+  assert.equal(off.success, true, off.error);
+  gate.release();
+  const lighting = await on;
+  assert.equal(lighting.success, false);
+  assert.match(lighting.error, /Extinction demandée entre-temps/);
   assert.deepEqual(server.commands(), [{ mac_address: MACS.living, name: 'power', value: 0 }]);
-  release();
-  await on;
+  assert.equal(server.stoves[MACS.living].power, 0);
+});
+
+test('a turn off waits for a lighting request in flight, then lands after it', async (t) => {
+  const { gladys, server } = await setup(t, { config: allowAll });
+  const gate = hold(server, putOf('power'));
+  const on = press(gladys, MACS.living, 'power-on');
+  await settle();
+  const off = press(gladys, MACS.living, 'power-off');
+  await settle();
+  assert.deepEqual(
+    server.commands().map((c) => c.value),
+    [1],
+    'the turn off waits for the lighting PUT',
+  );
+  gate.release();
+  assert.equal((await on).success, true);
+  assert.equal((await off).success, true);
+  assert.deepEqual(
+    server.commands().map((c) => c.value),
+    [1, 0],
+  );
+  assert.equal(server.stoves[MACS.living].power, 0);
+});
+
+test('a lighting request that never ends: the turn off is sent anyway by its deadline', async (t) => {
+  const { gladys, server } = await setup(t, { config: allowAll });
+  const gate = hold(server, putOf('power'));
+  press(gladys, MACS.living, 'power-on');
+  await settle();
+  const off = press(gladys, MACS.living, 'power-off');
+  await settle();
+  t.mock.timers.tick(3_200);
+  await settle();
+  assert.equal((await off).success, true);
+  assert.deepEqual(
+    server.commands().map((c) => c.value),
+    [1, 0],
+  );
+  gate.release();
+});
+
+test('a turn off 2 h into a 6 h pause of the API: sent at the first press', async (t) => {
+  const { gladys, server, advance } = await setup(t);
+  server.queue.push({
+    match: readOf(MACS.living),
+    status: 429,
+    headers: { 'retry-after': String(6 * 3600) },
+  });
+  await advance(MINUTE);
+  assert.match(message(gladys).fr, /pause de 6 h/);
+  await advance(2 * HOUR, MINUTE);
+  const off = await press(gladys, MACS.cabin, 'power-off');
+  assert.equal(off.success, true, off.error);
+  assert.equal(server.stoves[MACS.cabin].power, 0);
+  assert.ok(server.refreshes().length >= 2, 'the renewals went on during the API pause');
+});
+
+test('a 401 on the turn off: the token is renewed within the deadline and it is sent again', async (t) => {
+  const { gladys, server } = await setup(t);
+  server.queue.push({ match: putOf('power'), status: 401 });
+  const refreshes = server.refreshes().length;
+  const off = await press(gladys, MACS.cabin, 'power-off');
+  assert.equal(off.success, true, off.error);
+  assert.equal(server.refreshes().length, refreshes + 1);
+  assert.equal(server.commands().length, 2);
+  assert.equal(server.stoves[MACS.cabin].power, 0);
+});
+
+test('a 401 on a setpoint: refused, and the token renewed at once', async (t) => {
+  const { gladys, server } = await setup(t, { config: allowAll });
+  server.queue.push({ match: putOf('enviroment_1_temperature'), status: 401 });
+  const refreshes = server.refreshes().length;
+  const ack = await press(gladys, MACS.living, 'setpoint', 23);
+  assert.equal(ack.success, false);
+  await settle();
+  assert.equal(server.refreshes().length, refreshes + 1);
+  const again = await press(gladys, MACS.living, 'setpoint', 23);
+  assert.equal(again.success, true, again.error);
 });
 
 test('the buttons accept only 1; the setpoint and the power level are strict', async (t) => {
@@ -517,4 +619,82 @@ test('a republished device keeps the features it was created with', async (t) =>
   await advance(MINUTE);
   const roles = deviceOf(gladys, MACS.living).features.map((f) => f.external_id.split(':').pop());
   assert.ok(roles.includes('fan-2') && roles.includes('last-alarm'));
+});
+
+test('a 5xx or a timeout on one stove: the other is still read; none answering is "unreachable"', async (t) => {
+  const { gladys, server, advance } = await setup(t);
+  server.queue.push({ match: readOf(MACS.living), status: 503 });
+  await advance(MINUTE);
+  assert.equal(gladys.fake.connectionStatus.connected, true);
+  assert.match(message(gladys).fr, /1 poêle n'a pas pu être lu/);
+  const badge = badgeOf(gladys, MACS.living);
+  assert.deepEqual([badge.transport, badge.degraded], ['unreachable', true]);
+  assert.match(badge.message.fr, /n'a pas répondu pour ce poêle/);
+  assert.equal(badgeOf(gladys, MACS.cabin).transport, 'cloud');
+
+  server.queue.push({ match: readOf(MACS.living), status: 503 });
+  server.queue.push({
+    match: readOf(MACS.cabin),
+    throws: new EdilkaminError('timeout', 'no answer within 15 s'),
+  });
+  await advance(MINUTE);
+  assert.equal(gladys.fake.connectionStatus.connected, false);
+  assert.match(message(gladys).fr, /^Edilkamin est injoignable/);
+});
+
+test('statuses in French hold no English reason', async (t) => {
+  const { gladys, server, advance } = await setup(t);
+  server.down = true;
+  await advance(MINUTE);
+  const { fr, en } = message(gladys);
+  assert.match(fr, /injoignable \(erreur réseau\)/);
+  assert.match(en, /cannot be reached \(network error\)/);
+  for (const word of ['network', 'unavailable', 'timeout', 'request', 'refused']) {
+    assert.ok(!fr.includes(word), `"${word}" in a French status`);
+  }
+});
+
+test('any challenge but a new password: a stop, no new try by itself; the test button lifts it', async (t) => {
+  const server = fakeEdilkamin({ challenge: 'CUSTOM_CHALLENGE' });
+  const { gladys, app, advance, store } = await setup(t, { server, create: false });
+  assert.equal(store.data.block.kind, 'unsupported_challenge');
+  assert.match(message(gladys).fr, /CUSTOM_CHALLENGE\).*ne réessaie jamais d'elle-même/);
+  await advance(25 * HOUR, 10 * MINUTE);
+  assert.equal(server.srpStarts().length, 1);
+  // A reconnection to Gladys goes through configUpdated: it never lifts the stop.
+  await app.connected(CONFIG);
+  await settle();
+  assert.equal(server.srpStarts().length, 1);
+  server.challenge = undefined;
+  const ack = await gladys.fake.action(ACTIONS.TEST_CONNECTION);
+  assert.match(ack.data.message.fr, /Connecté à Edilkamin/);
+  assert.equal(server.srpStarts().length, 2);
+});
+
+test('the two-factor stop tells to test the connection or change the credentials', async (t) => {
+  const server = fakeEdilkamin({ challenge: 'SMS_MFA' });
+  const { gladys } = await setup(t, { server, create: false });
+  assert.match(
+    message(gladys).fr,
+    /Tester la connexion », ou changez l'identifiant ou le mot de passe/,
+  );
+});
+
+test('new credentials drop the tokens of the old ones: a new sign-in', async (t) => {
+  const { app, server, store } = await setup(t);
+  const before = store.data.tokens.refreshToken;
+  server.password = 'a new password';
+  await app.configUpdated({ ...CONFIG, password: 'a new password' });
+  await settle();
+  assert.equal(server.srpStarts().length, 2);
+  assert.notEqual(store.data.tokens.refreshToken, before);
+});
+
+test('one stove only and a 403: the status asks to check its MAC address', async (t) => {
+  const { gladys, server, advance } = await setup(t, {
+    config: { ...CONFIG, mac_addresses: MACS.living },
+  });
+  server.queue.push({ match: readOf(MACS.living), status: 403 });
+  await advance(MINUTE);
+  assert.match(message(gladys).fr, /pause de 30 min\. Vérifiez l'adresse MAC du poêle/);
 });

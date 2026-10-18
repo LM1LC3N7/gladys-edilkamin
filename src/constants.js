@@ -85,21 +85,18 @@ export const TIMINGS = {
   commandAnswerBy: 4_600,
   /** The read just before a command: 3 s at most. */
   commandReadTimeout: 3_000,
-  /**
-   * The read before turning off: 2 s at most. Turning off never waits on it:
-   * when it fails, the stove is turned off anyway (the safe direction).
-   */
-  offReadTimeout: 2_000,
   /** A command uses the current token when it is valid for 60 s more. */
   commandTokenValidity: MINUTE,
-  /** Turning off uses the current token while it is valid at all (10 s more). */
+  /**
+   * Turning off uses the current token while it is valid 10 s more; below
+   * that, it renews it within its own deadline.
+   */
   offTokenValidity: 10 * SECOND,
   /** The shortest timeout worth a request, inside the command deadline. */
   minRequestTimeout: 300,
   /**
-   * After a power command (sent or maybe sent): lighting is refused, and
-   * turning off never answers "already off", until a read shows the expected
-   * state, or for 60 s at most.
+   * After a power command (sent or maybe sent): lighting is refused until a
+   * read shows the expected state, or for 60 s at most.
    */
   powerGuard: MINUTE,
   /** A read this soon after the command never ends its guard (the cloud may lag). */

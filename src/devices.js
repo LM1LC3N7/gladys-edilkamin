@@ -46,7 +46,9 @@ export const FEATURES = {
     min: -40,
     max: 100,
   },
-  // Writable behind allow_commands; never turns the stove on.
+  // Writable behind allow_commands. Never sends the lighting order; on a stove
+  // already running but on standby (flame out), a higher setpoint makes it start
+  // again, as in the app.
   setpoint: {
     category: C.THERMOSTAT,
     type: TYPES.THERMOSTAT.TARGET_TEMPERATURE,

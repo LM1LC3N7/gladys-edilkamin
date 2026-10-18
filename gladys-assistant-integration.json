@@ -110,8 +110,8 @@
         "fr": "Autoriser la consigne et la puissance depuis Gladys"
       },
       "description": {
-        "en": "Off by default: the setpoint and the power level are shown, not changed. They never light the stove.",
-        "fr": "Désactivé par défaut : la consigne et la puissance sont affichées, pas modifiées. Elles n'allument jamais le poêle."
+        "en": "Off by default: the setpoint and the power level are shown, not changed. They never send the lighting order; on a stove already running but on standby (flame out), a higher setpoint makes it start again, as in the app.",
+        "fr": "Désactivé par défaut : la consigne et la puissance sont affichées, pas modifiées. Elles n'envoient jamais l'ordre d'allumage ; sur un poêle déjà en marche en veille (flamme éteinte), une consigne plus haute le fait repartir, comme dans l'application."
       },
       "required": false,
       "default": false

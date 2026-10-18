@@ -10,22 +10,26 @@
 //   them on;
 // - no switch: lighting and turning off are two buttons, the on/off state is
 //   read only (an "everything on" can never light the stove);
-// - the stove is read again (GET device/{mac}/info) just before acting, never
-//   decided on a state in memory; lighting, the setpoint and the power level
-//   are refused when that read fails or lacks the value. Turning off is the
-//   one exception: a failed read never stops it (the safe direction), it only
-//   skips the "already off" shortcut;
+// - lighting, the setpoint and the power level read the stove again (GET
+//   device/{mac}/info) just before acting, never decide on a state in memory,
+//   and are refused when that read fails or lacks the value;
+// - turning off decides nothing: `power` 0 is always sent (never answered
+//   "already off"), it never waits behind the queue, only behind a lighting
+//   request already in flight (so it lands after it), and renews an expired
+//   token within its own deadline;
+// - a turn off counts at its arrival: a lighting queued or in progress that
+//   sees the count change is refused, up to the moment it sends;
 // - lighting, the setpoint and the power level of one stove run one at a time
-//   (a promise chain per stove); turning off never waits behind them;
+//   (a promise chain per stove);
 // - a command not sent 3.5 s after it arrived is refused (Gladys shows a
 //   failure after 5 s: nothing must happen after that);
-// - after a power command (sent or maybe sent), lighting is refused, and
-//   turning off never answers "already off", until a later read shows the
-//   expected state, 60 s at most.
+// - after a power command (sent or maybe sent), lighting is refused until a
+//   later read shows the expected state, 60 s at most.
 //
 // The pauses (429, 403) and the stops (refused credentials) are kept in
-// /data and hold for every path but turning off. index.js only wires the SDK
-// handlers to this class.
+// /data and hold for every path but turning off. A pause of the Edilkamin API
+// does not stop the token renewals (one of Cognito does). index.js only wires
+// the SDK handlers to this class.
 // -----------------------------------------------------------------------------
 
 import { DEVICE_TRANSPORTS, createLogger } from '@gladysassistant/integration-sdk';
@@ -42,18 +46,35 @@ import {
 } from './devices.js';
 import { parseStove } from './edilkamin.js';
 import { EdilkaminError, errorReason } from './http.js';
-import { T, age, join, word } from './i18n.js';
+import { T, age, join, reasonOf, word } from './i18n.js';
 import { StatePublisher } from './publisher.js';
 import { fileStore, normalizeMemory } from './store.js';
 
 /** Errors after which Edilkamin did not answer usefully: every stove is unreachable. */
-const OFFLINE = new Set(['network', 'timeout', 'unavailable', 'http']);
+const OFFLINE = new Set(['network', 'timeout', 'unavailable']);
 
 /** Errors of one stove only: the others are still read. */
-const PER_STOVE = new Set(['not_found', 'forbidden', 'bad_response', 'size', 'http']);
+const PER_STOVE = new Set([
+  'not_found',
+  'forbidden',
+  'bad_response',
+  'size',
+  'http',
+  'unavailable',
+  'timeout',
+]);
+
+/** Per-stove errors that say nothing about the stove itself (the cloud did not answer). */
+const TRANSIENT = new Set(['unavailable', 'timeout', 'http']);
 
 /** Stops retried by themselves, spaced (1 h, 6 h, then every 24 h). */
-const SPACED = new Set(['refused', 'new_password', 'unsupported_challenge', 'session_refused']);
+const SPACED = new Set(['refused', 'new_password', 'session_refused']);
+
+/**
+ * Stops never retried by themselves (each sign-in could send a code, or meet
+ * the same unknown step): only the test button, or new credentials, lift them.
+ */
+const NO_AUTO_RETRY = new Set(['two_factor', 'unsupported_challenge']);
 
 /** Command errors after which Edilkamin may have executed it anyway. */
 const MAYBE_SENT = new Set(['timeout', 'network', 'unavailable', 'bad_response', 'size']);
@@ -123,6 +144,12 @@ export class EdilkaminApp {
     this.commandChains = new Map();
     /** mac -> { expected, sentAt, until }: see observe(). */
     this.guards = new Map();
+    /** mac -> how many turn offs arrived (a lighting is refused when it changed). */
+    this.offCounts = new Map();
+    /** mac -> the lighting request in flight (settles, never rejects). */
+    this.lightings = new Map();
+    /** 'api' | 'cognito': where the current 429 pause comes from. */
+    this.pauseSource = undefined;
     this.lastStatus = undefined;
     this.lastTestAt = -Infinity;
     /** When the renewal timer last renewed the token (at most one per renewRetry). */
@@ -145,12 +172,15 @@ export class EdilkaminApp {
       this.memory = { ...this.memory, account, tokens: null, block: null };
     }
     if (fresh) {
+      // New credentials: the stop is lifted and the tokens of the old ones go.
       this.memory.block = null;
+      this.memory.tokens = null;
     }
     const { pause, block } = this.memory;
     if (pause && pause.until > this.now()) {
       this.pausedUntil = pause.until;
       this.pauseKind = pause.kind;
+      this.pauseSource = pause.source;
     }
     if (block) {
       this.blocked = block.kind;
@@ -225,9 +255,18 @@ export class EdilkaminApp {
   }
 
   /**
+   * A 429 of Cognito itself holds now: the renewals wait for its end. A pause
+   * of the Edilkamin API (429, 403) does not stop them, so turning off always
+   * finds a valid token.
+   */
+  get cognitoPaused() {
+    return this.pauseKind === 'rate' && this.pauseSource === 'cognito' && this.hardPaused;
+  }
+
+  /**
    * The renewal of the token, at its expiry minus the margin, whatever the
    * poll interval: a command never meets an expired token. It waits for the
-   * end of a 429/403 pause and never runs during a stop.
+   * end of a Cognito 429 pause and never runs during a stop.
    */
   scheduleRenew(delay) {
     this.clearRenewTimer();
@@ -239,7 +278,7 @@ export class EdilkaminApp {
     // A floor: a token shorter than the margin, or a host clock ahead, would
     // otherwise renew at once again and again.
     at = Math.max(at, this.lastRenewAt + TIMINGS.renewRetry);
-    if (this.hardPaused) {
+    if (this.cognitoPaused) {
       at = Math.max(at, this.pausedUntil);
     }
     const generation = this.generation;
@@ -249,7 +288,7 @@ export class EdilkaminApp {
         if (generation !== this.generation || this.blocked) {
           return;
         }
-        if (this.hardPaused || this.now() < (this.client.renewAt ?? Infinity) - 1_000) {
+        if (this.cognitoPaused || this.now() < (this.client.renewAt ?? Infinity) - 1_000) {
           this.scheduleRenew();
           return;
         }
@@ -298,6 +337,7 @@ export class EdilkaminApp {
     if (this.pauseKind !== 'rate' || this.now() >= this.pausedUntil) {
       this.pausedUntil = 0;
       this.pauseKind = undefined;
+      this.pauseSource = undefined;
     }
   }
 
@@ -394,7 +434,9 @@ export class EdilkaminApp {
   async persist() {
     this.memory.account = this.config.account;
     this.memory.tokens = this.client.tokens ? { ...this.client.tokens } : null;
-    this.memory.pause = this.hardPaused ? { kind: this.pauseKind, until: this.pausedUntil } : null;
+    this.memory.pause = this.hardPaused
+      ? { kind: this.pauseKind, until: this.pausedUntil, source: this.pauseSource ?? 'api' }
+      : null;
     this.memory.block = this.blocked
       ? {
           kind: this.blocked,
@@ -424,7 +466,7 @@ export class EdilkaminApp {
     }
     const now = this.now();
     let delay;
-    if (this.blocked === 'two_factor') {
+    if (NO_AUTO_RETRY.has(this.blocked)) {
       return;
     } else if (this.blocked) {
       delay = Math.max(this.retryAt, this.pausedUntil) - now;
@@ -473,7 +515,7 @@ export class EdilkaminApp {
     this.client.beginCycle();
     this.client.setTimeoutMs(quick ? TIMINGS.quickTimeout : undefined);
     try {
-      const { read, forbidden } = await this.readAll(generation);
+      const { read, forbidden, transient } = await this.readAll(generation);
       if (generation !== this.generation) {
         return;
       }
@@ -481,6 +523,10 @@ export class EdilkaminApp {
       if (read === 0 && forbidden === total) {
         // Every stove refused (403): a WAF or a CDN block, not one wrong MAC.
         throw new EdilkaminError('forbidden', 'every stove was refused', { status: 403 });
+      }
+      if (read === 0 && transient) {
+        // No stove answered at all: Edilkamin is unreachable, the backoff follows.
+        throw transient;
       }
       this.readAt = this.now();
       await this.publishDevices();
@@ -519,12 +565,14 @@ export class EdilkaminApp {
 
   /**
    * Every stove of the configuration, one after the other. An error of one
-   * stove (404, 403, a bad document) marks only that stove; any other error
-   * (network, 429, the session) ends the cycle.
+   * stove (404, 403, 5xx, a timeout, a bad document) marks only that stove;
+   * any other error (network, 429, the session) ends the cycle.
+   * `transient`: the last 5xx/timeout/other HTTP error, when no stove answered.
    */
   async readAll(generation) {
     let read = 0;
     let forbidden = 0;
+    let transient;
     for (const mac of this.config.macs) {
       try {
         const info = await this.client.info(mac);
@@ -541,13 +589,16 @@ export class EdilkaminApp {
         if (err.kind === 'forbidden') {
           forbidden += 1;
         }
+        if (TRANSIENT.has(err.kind)) {
+          transient = err;
+        }
         if (!this.unreadable.has(mac)) {
           this.logger.warn(`Edilkamin stove ${short(mac)}: ${errorReason(err)}`);
         }
         this.unreadable.set(mac, err.kind);
       }
     }
-    return { read, forbidden };
+    return { read, forbidden, transient: read === 0 ? transient : undefined };
   }
 
   /** The message of a stop. */
@@ -559,7 +610,7 @@ export class EdilkaminApp {
       case 'new_password':
         return T.newPassword;
       case 'unsupported_challenge':
-        return T.unsupportedChallenge(this.blockDetail, wait);
+        return T.unsupportedChallenge(this.blockDetail);
       case 'session_refused':
         return T.sessionRefused(wait);
       default:
@@ -574,13 +625,15 @@ export class EdilkaminApp {
       await this.setStatus(false, T.noCredentials);
       return;
     }
-    if (err.kind === 'two_factor') {
-      // Never signed in again by itself: each sign-in would send a new code.
-      this.blocked = 'two_factor';
+    if (NO_AUTO_RETRY.has(err.kind)) {
+      // Never signed in again by itself: each sign-in could send a new code,
+      // or meet the same unknown step again.
+      this.blocked = err.kind;
       this.blockDetail = err.challenge;
-      this.logger.warn(`Edilkamin asks for a verification code (${err.challenge}): stopped`);
+      this.retryAt = 0;
+      this.logger.warn(`Edilkamin asks for a sign-in step (${err.challenge ?? '?'}): stopped`);
       await this.persist();
-      await this.setStatus(false, T.twoFactor);
+      await this.setStatus(false, this.blockedMessage());
       return;
     }
     if (SPACED.has(err.kind)) {
@@ -605,6 +658,10 @@ export class EdilkaminApp {
       wait = this.forbid();
       this.offline = true;
       message = T.forbidden(age(wait));
+      if (this.config.macs.length === 1) {
+        // One stove only: a wrong MAC address is the likely cause.
+        message = join(message, T.checkMac);
+      }
     } else {
       // Never read again faster than the poll interval.
       wait = Math.max(
@@ -614,7 +671,7 @@ export class EdilkaminApp {
       this.pauseKind = 'backoff';
       this.pausedUntil = Math.max(this.pausedUntil, this.now() + wait);
       this.offline = OFFLINE.has(err.kind) || err.kind === 'unauthorized' || this.offline;
-      message = T.unreachable(reason, age(wait));
+      message = T.unreachable(reasonOf(err), age(wait));
     }
     this.failures += 1;
     await this.persist();
@@ -627,6 +684,10 @@ export class EdilkaminApp {
   pause(err) {
     const asked = err.retryAfter ?? TIMINGS.rateLimitDefault;
     const wait = Math.max(TIMINGS.rateLimitMin, Math.min(TIMINGS.rateLimitMax, asked));
+    if (this.pauseKind !== 'rate' || this.now() + wait > this.pausedUntil) {
+      // The source of the longest pause: Cognito (renewals wait) or the API (they go on).
+      this.pauseSource = err.source === 'cognito' ? 'cognito' : 'api';
+    }
     this.pausedUntil = Math.max(this.pausedUntil, this.now() + wait);
     this.pauseKind = 'rate';
     return wait;
@@ -638,6 +699,7 @@ export class EdilkaminApp {
     if (!(this.pauseKind === 'rate' && this.pausedUntil > this.now() + wait)) {
       this.pausedUntil = Math.max(this.pausedUntil, this.now() + wait);
       this.pauseKind = 'forbidden';
+      this.pauseSource = 'api';
     }
     return wait;
   }
@@ -740,7 +802,7 @@ export class EdilkaminApp {
       return {
         transport: DEVICE_TRANSPORTS.UNREACHABLE,
         degraded: true,
-        message: T.stoveUnreadable,
+        message: TRANSIENT.has(this.unreadable.get(mac)) ? T.stoveNoAnswer : T.stoveUnreadable,
       };
     }
     return { transport: DEVICE_TRANSPORTS.CLOUD };
@@ -855,15 +917,19 @@ export class EdilkaminApp {
       throw new Error(`${feature?.external_id} cannot be set`);
     }
     const checked = this.commandValue(target.role, value);
-    if (target.role === 'power-off') {
+    const { mac, role } = target;
+    if (role === 'power-off') {
+      // Counted at once (synchronously): a lighting queued or reading now sees it.
+      this.offCounts.set(mac, (this.offCounts.get(mac) ?? 0) + 1);
       // Turning off never waits behind a lighting or a setpoint of the same stove.
-      return this.powerOff(target.mac, receivedAt);
+      return this.powerOff(mac, receivedAt);
     }
-    return this.serialized(target.mac, () =>
-      target.role === 'power-on'
-        ? this.powerOn(target.mac, receivedAt)
-        : this.setParameter(target.mac, target.role, checked, receivedAt),
-    );
+    if (role === 'power-on') {
+      // The turn-off count at the arrival of the lighting, before any wait.
+      const offSeen = this.offCounts.get(mac) ?? 0;
+      return this.serialized(mac, () => this.powerOn(mac, receivedAt, offSeen));
+    }
+    return this.serialized(mac, () => this.setParameter(mac, role, checked, receivedAt));
   }
 
   /** Runs `task` after the previous task of the same key (a promise chain per key). */
@@ -883,6 +949,11 @@ export class EdilkaminApp {
   /** Time left before the deadline of a command that arrived at `receivedAt`. */
   remaining(receivedAt) {
     return receivedAt + TIMINGS.commandDeadline - this.now();
+  }
+
+  /** A turn off of this stove arrived after `offSeen` was taken. */
+  offRequested(mac, offSeen) {
+    return (this.offCounts.get(mac) ?? 0) !== offSeen;
   }
 
   /** The checks every command but turning off shares, before its read. */
@@ -912,15 +983,25 @@ export class EdilkaminApp {
     }
   }
 
-  /** Lighting: behind allow_power_on, on a fresh read showing the stove off. */
-  async powerOn(mac, receivedAt) {
+  /**
+   * Lighting: behind allow_power_on, on a fresh read showing the stove off,
+   * and refused as soon as a turn off of the stove arrived after it (checked
+   * before the read, after it, and right before sending).
+   */
+  async powerOn(mac, receivedAt, offSeen) {
     const generation = this.generation;
     if (!this.config.allowPowerOn) {
       throw this.refusal(T.denied.powerOn);
     }
+    if (this.offRequested(mac, offSeen)) {
+      throw this.refusal(T.denied.offMeanwhile);
+    }
     this.checkCommand(mac, receivedAt, generation);
     // The state just before acting, never the one in memory.
     const stove = await this.readStove(mac, receivedAt);
+    if (this.offRequested(mac, offSeen)) {
+      throw this.refusal(T.denied.offMeanwhile);
+    }
     if (this.guardActive(mac)) {
       // The previous power command may not show yet: never "already on" on it.
       throw this.refusal(T.denied.inProgress);
@@ -938,14 +1019,21 @@ export class EdilkaminApp {
     if (generation !== this.generation || this.blocked || !this.config.allowPowerOn) {
       throw this.refusal(this.config.allowPowerOn ? T.denied.stopped : T.denied.powerOn);
     }
-    await this.send(mac, COMMANDS.POWER, GLADYS.ON, receivedAt, { guard: true });
+    // Synchronous with the start of the request: no turn off can slip in between.
+    if (this.offRequested(mac, offSeen)) {
+      throw this.refusal(T.denied.offMeanwhile);
+    }
+    await this.send(mac, COMMANDS.POWER, GLADYS.ON, receivedAt, { guard: true, lighting: true });
     this.logger.info(`Edilkamin stove ${short(mac)}: lighting sent`);
   }
 
   /**
-   * Turning off: always allowed, also during a pause or a stop when the
-   * token still works. The read only tells "already off"; a failed read never
-   * stops it.
+   * Turning off: always allowed, also during a pause or a stop, and always
+   * sent (`power` 0 on a stove already off changes nothing: the cloud answers
+   * "Value is already 0"), so it is never answered "already off" while a
+   * lighting is queued or on its way. A lighting request in flight is waited
+   * for (until the turn off's own deadline), so the turn off arrives after it.
+   * An expired token is renewed within the deadline.
    */
   async powerOff(mac, receivedAt) {
     if (!this.client.hasCredentials) {
@@ -955,27 +1043,61 @@ export class EdilkaminApp {
       throw this.refusal(T.denied.unknownDevice);
     }
     if (!this.client.tokenValidFor(TIMINGS.offTokenValidity)) {
-      const generation = this.generation;
-      this.client
-        .token({ signIn: false, validity: TIMINGS.commandTokenValidity })
-        .catch((err) => this.renewFailed(err, generation));
-      throw this.refusal(this.blocked ? T.denied.stopped : T.denied.session);
+      await this.refreshWithin(receivedAt);
     }
-    let stove;
-    try {
-      stove = await this.readStove(mac, receivedAt, { budget: TIMINGS.offReadTimeout });
-    } catch (err) {
-      this.logger.info(`Edilkamin stove ${short(mac)}: turning off without a fresh state`);
-      if (err.cause?.kind === 'late' || this.remaining(receivedAt) <= TIMINGS.minRequestTimeout) {
-        // No time left for the command itself: nothing is sent after the failure Gladys shows.
-        throw err;
-      }
+    const lighting = this.lightings.get(mac);
+    if (lighting) {
+      const wait = receivedAt + TIMINGS.commandStartBy - TIMINGS.minRequestTimeout - this.now();
+      await this.withDeadline(lighting, wait).catch(() => {});
     }
-    if (stove?.power === false && !this.guardActive(mac)) {
-      return;
-    }
-    await this.send(mac, COMMANDS.POWER, GLADYS.OFF, receivedAt, { guard: true, expected: false });
+    await this.send(mac, COMMANDS.POWER, GLADYS.OFF, receivedAt, {
+      guard: true,
+      expected: false,
+      renewOn401: true,
+    });
     this.logger.info(`Edilkamin stove ${short(mac)}: turning off sent`);
+  }
+
+  /**
+   * A new token from the refresh token, within the deadline of the command
+   * that arrived at `receivedAt` (the Cognito request is bounded by the time
+   * left); a refusal when it cannot be had.
+   */
+  async refreshWithin(receivedAt) {
+    const budget = receivedAt + TIMINGS.commandStartBy - TIMINGS.minRequestTimeout - this.now();
+    if (!this.client.tokens?.refreshToken || this.cognitoPaused) {
+      throw this.refusal(
+        this.blocked ? T.denied.stopped : this.cognitoPaused ? T.denied.paused : T.denied.session,
+      );
+    }
+    if (budget < TIMINGS.minRequestTimeout) {
+      throw this.refusal(T.denied.late);
+    }
+    try {
+      await this.withDeadline(
+        this.client.token({ force: true, signIn: false, timeout: budget }),
+        budget,
+      );
+    } catch (err) {
+      if (err.kind === 'rate_limited') {
+        this.pause(err);
+        await this.persist();
+      }
+      this.logger.info(`Edilkamin: no new token within the command (${errorReason(err)})`);
+      throw this.refusal(T.denied.session, err);
+    }
+  }
+
+  /** `promise`, or a timeout error after `ms` (the promise itself goes on). */
+  withDeadline(promise, ms) {
+    let handle;
+    const deadline = new Promise((_, reject) => {
+      handle = this.timers.setTimeout(
+        () => reject(new EdilkaminError('timeout', 'no answer within the command')),
+        Math.max(0, ms),
+      );
+    });
+    return Promise.race([promise, deadline]).finally(() => this.timers.clearTimeout(handle));
   }
 
   /** The setpoint or the power level: behind allow_commands, on a fresh read. */
@@ -1004,19 +1126,52 @@ export class EdilkaminApp {
     this.logger.info(`Edilkamin stove ${short(mac)}: ${role} sent`);
   }
 
-  /** `PUT mqtt/command` within the deadline; a guard and follow-up reads after it. */
-  async send(mac, name, value, receivedAt, { guard, expected = value === GLADYS.ON }) {
+  /**
+   * `PUT mqtt/command` within the deadline; a guard and follow-up reads after
+   * it. `lighting`: the request is kept while in flight (a turn off waits for
+   * it). `renewOn401`: a refused token is renewed within the deadline and the
+   * command sent once more (turning off only: it is safe to repeat).
+   */
+  async send(
+    mac,
+    name,
+    value,
+    receivedAt,
+    { guard, expected = value === GLADYS.ON, lighting = false, renewOn401 = false },
+  ) {
     try {
-      await this.client.command(mac, name, value, {
+      const request = this.client.command(mac, name, value, {
         // Sent 3.4 s after the arrival at the latest; answered by 4.6 s after it.
         startBy: receivedAt + TIMINGS.commandStartBy,
         validity: TIMINGS.offTokenValidity,
         timeout: () =>
           Math.max(TIMINGS.minRequestTimeout, receivedAt + TIMINGS.commandAnswerBy - this.now()),
       });
+      if (lighting) {
+        const settled = request.catch(() => {});
+        this.lightings.set(mac, settled);
+        settled.then(() => {
+          if (this.lightings.get(mac) === settled) {
+            this.lightings.delete(mac);
+          }
+        });
+      }
+      await request;
     } catch (err) {
       if (err.kind === 'late') {
         throw this.refusal(T.denied.late, err);
+      }
+      if (err.kind === 'unauthorized') {
+        if (renewOn401) {
+          await this.refreshWithin(receivedAt);
+          return this.send(mac, name, value, receivedAt, { guard, expected });
+        }
+        // Renewed at once for the next command (never inside this one).
+        const generation = this.generation;
+        this.client
+          .token({ force: true, signIn: false })
+          .catch((renewal) => this.renewFailed(renewal, generation));
+        throw this.refusal(T.denied.session, err);
       }
       if (err.kind === 'rate_limited') {
         this.pause(err);
@@ -1028,14 +1183,11 @@ export class EdilkaminApp {
           this.guard(mac, expected);
         }
         this.followUp();
-        throw new Error(word(T.maybeSent(errorReason(err)), this.config.language), {
+        throw new Error(word(T.maybeSent(reasonOf(err)), this.config.language), {
           cause: err,
         });
       }
-      if (err.kind === 'unauthorized') {
-        throw this.refusal(T.denied.session, err);
-      }
-      throw new Error(word(T.commandFailed(errorReason(err)), this.config.language), {
+      throw new Error(word(T.commandFailed(reasonOf(err)), this.config.language), {
         cause: err,
       });
     }
@@ -1079,10 +1231,11 @@ export class EdilkaminApp {
   }
 
   /**
-   * GET device/{mac}/info within the command deadline (`budget`: a shorter
-   * read); a refusal on any failure.
+   * GET device/{mac}/info within the command deadline (3 s at most); a
+   * refusal on any failure.
    */
-  async readStove(mac, receivedAt, { budget = TIMINGS.commandReadTimeout } = {}) {
+  async readStove(mac, receivedAt) {
+    const budget = TIMINGS.commandReadTimeout;
     let info;
     try {
       info = await this.client.info(mac, {

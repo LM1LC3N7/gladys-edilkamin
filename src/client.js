@@ -126,25 +126,26 @@ export class EdilkaminClient {
 
   /**
    * A valid token: the current one, else renewed from the refresh token,
-   * else (once per cycle) a new sign-in. One renewal at a time.
+   * else (once per cycle) a new sign-in. One renewal at a time. `timeout`:
+   * the Cognito request of a renewal started here (a command's deadline).
    */
-  token({ force = false, signIn = true, validity = TIMINGS.tokenMargin } = {}) {
+  token({ force = false, signIn = true, validity = TIMINGS.tokenMargin, timeout } = {}) {
     if (!force && this.tokenValidFor(validity)) {
       return Promise.resolve(this.tokens.idToken);
     }
     if (!this.renewing) {
-      this.renewing = this.renew({ signIn }).finally(() => {
+      this.renewing = this.renew({ signIn, timeout }).finally(() => {
         this.renewing = undefined;
       });
     }
     return this.renewing;
   }
 
-  async renew({ signIn }) {
+  async renew({ signIn, timeout }) {
     if (this.tokens?.refreshToken) {
       const before = this.tokens;
       try {
-        const tokens = await this.cognito.refresh(before);
+        const tokens = await this.cognito.refresh(before, { timeout });
         if (this.tokens === before) {
           this.tokens = tokens;
           await this.changed();

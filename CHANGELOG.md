@@ -40,4 +40,18 @@ the notes of the version's GitHub Release.
   again at each reconnection to Gladys.
 - Feature names and texts in French or English.
 
+### Fixed
+
+- Turning off is always sent (never answered "already off"), cancels a
+  lighting waiting or reading, and waits for a lighting request already on
+  its way so it lands after it.
+- Turning off renews an expired token within its own deadline, and after a
+  401; a pause of the Edilkamin API no longer stops the token renewals.
+- A 5xx or a timeout on one stove no longer stops the reading of the others.
+- Any unknown Cognito sign-in step stops the integration without a new try by
+  itself; new credentials drop the old tokens.
+- French statuses no longer hold English reasons; with one stove, a 403 asks
+  to check its MAC address; the docs say the setpoint can restart a stove on
+  standby, and that voice assistants can neither light nor turn off a stove.
+
 [Unreleased]: https://github.com/LM1LC3N7/gladys-edilkamin/commits/main

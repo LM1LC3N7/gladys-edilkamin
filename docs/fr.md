@@ -56,23 +56,31 @@ le compte est à l'arrêt.
 
 Un poêle à granulés est un appareil à flamme :
 
-- **L'extinction est toujours permise**, sans option. Elle n'attend jamais
-  derrière une autre commande du même poêle, et elle part aussi pendant une
-  pause demandée par Edilkamin, tant que la session est valable.
+- **L'extinction est toujours permise**, sans option, et toujours envoyée
+  (sur un poêle déjà éteint, elle ne change rien). Elle n'attend jamais
+  derrière une autre commande du même poêle, sauf un allumage déjà parti, pour
+  arriver après lui. Elle part aussi pendant une pause demandée par Edilkamin,
+  et renouvelle elle-même une session expirée dans son délai.
+- Un allumage en attente ou en cours est **annulé** si une extinction arrive
+  entre-temps (« extinction demandée entre-temps »).
 - **L'allumage** est désactivé par défaut : activez **Autoriser l'allumage des
   poêles depuis Gladys** pour le permettre. Une scène ou un tableau de bord
   peut alors allumer une flamme chez vous en votre absence : vérifiez d'abord
   le poêle, sa vitre et ses abords.
 - **Il n'y a pas d'interrupteur** : l'état « Allumé » est en lecture seule, et
-  l'allumage comme l'extinction sont des boutons. Un « allume tout » d'un
-  assistant vocal (Google Home, Alexa, HomeKit) ou d'une scène ne peut donc
-  jamais allumer le poêle.
+  l'allumage comme l'extinction sont des boutons. Un « allume tout » ou un
+  « éteins tout » d'une scène ne touche donc jamais le poêle, et les
+  assistants vocaux ne peuvent ni l'allumer ni l'éteindre. HomeKit montre la
+  consigne comme un thermostat bloqué sur « Chauffage » ; Google Home et Alexa
+  n'exposent pas la consigne.
 - **La consigne et la puissance** sont désactivées par défaut (**Autoriser la
-  consigne et la puissance depuis Gladys**). Elles n'allument jamais le poêle.
-- Avant chaque commande, l'intégration **relit le poêle** dans le cloud. Pour
-  l'allumage, la consigne et la puissance, la commande est refusée si cette
-  lecture échoue ou ne donne pas la valeur. Pour l'extinction, une lecture
-  ratée n'empêche rien : le poêle est éteint quand même.
+  consigne et la puissance depuis Gladys**). Elles n'envoient jamais l'ordre
+  d'allumage ; sur un poêle déjà en marche en veille (flamme éteinte), une
+  consigne plus haute le fait repartir, comme dans l'application.
+- Avant l'allumage, la consigne et la puissance, l'intégration **relit le
+  poêle** dans le cloud : la commande est refusée si cette lecture échoue ou
+  ne donne pas la valeur. L'extinction ne relit rien : elle n'a rien à
+  décider.
 - Les commandes d'un même poêle passent **une à la fois** (sauf l'extinction).
 - Une commande qui ne peut pas être envoyée dans les **3,5 secondes** suivant
   son arrivée est refusée : Gladys affiche un échec au bout de 5 secondes, et
@@ -116,16 +124,20 @@ par poêle, plus trois lectures dans la minute qui suit une commande.
   l'intégration s'arrête ; un nouvel essai après 1 h, 6 h, puis toutes les
   24 h, ou aussitôt quand vous enregistrez la configuration ou cliquez sur
   **Tester la connexion**.
-- **Code de vérification demandé** : non géré. L'intégration s'arrête et ne
-  se reconnecte jamais d'elle-même (chaque connexion enverrait un code).
+- **Code de vérification, ou toute autre étape de connexion** (sauf un nouveau
+  mot de passe) : non géré. L'intégration s'arrête et ne se reconnecte jamais
+  d'elle-même (chaque connexion pourrait envoyer un code) ; cliquez sur
+  **Tester la connexion**, ou changez l'identifiant ou le mot de passe.
 - **Session refusée juste après une nouvelle connexion** : nouvel essai après
   1 h, 6 h, puis toutes les 24 h.
 - **Edilkamin demande de ralentir** (429, ou trop de connexions) : une pause
   d'au moins 1 minute (Retry-After s'il est donné, 6 h au plus), pour tous les
   chemins sauf l'extinction, gardée aux redémarrages.
-- **HTTP 403 sur tous les poêles** : une pause de 30 minutes. Un 403 ou un 404
-  sur un seul poêle ne marque que lui (badge « injoignable »).
-- **Edilkamin injoignable** : nouvel essai après 1, 2, 5, 10 puis toutes les
+- **HTTP 403 sur tous les poêles** : une pause de 30 minutes (avec un seul
+  poêle, vérifiez son adresse MAC). Un 403, un 404, une erreur 5xx ou un délai
+  dépassé sur un seul poêle ne marque que lui (badge « injoignable ») ; les
+  autres sont lus quand même.
+- **Edilkamin injoignable** (aucun poêle n'a répondu) : nouvel essai après 1, 2, 5, 10 puis toutes les
   15 minutes, jamais plus vite que l'intervalle de rafraîchissement.
 
 ## Limites

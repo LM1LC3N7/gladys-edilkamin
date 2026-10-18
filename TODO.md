@@ -28,6 +28,11 @@ up to date at the end of every milestone.
       Tested against a fake cloud only (Node 22 and 24). Store validator:
       its only error is the `docker_image` not yet pullable from GHCR (no
       release yet). No Docker on this PC: the image build is left to the CI.
+- [x] **Review fixes** (2026-10-18, extra review of 270063f): turning off
+      always sent and counted at its arrival (a queued or reading lighting is
+      refused), waits only for a lighting PUT in flight; renewals go on during
+      an API pause, turning off renews within its deadline and on a 401;
+      per-stove 5xx/timeouts; every unknown challenge stops for good; texts.
 - [ ] **Milestone 2 — real stove**: run against a real account and stove,
       compare with The Mind app (see "To check"); turn the answers
       (anonymized) into fixtures.
@@ -77,16 +82,39 @@ up to date at the end of every milestone.
 - **A flame appliance is never a switch** (Louis, lot 6 lesson): `power` is
   `unknown/binary` read only; lighting and turning off are two
   `button/push` features (value 1 only). Google Home, Alexa, HomeKit, MCP and
-  `switch.*` scenes cannot light a stove with "everything on". The power
-  level is a `text/select` (P1–P5), not a dimmer; the setpoint is a
-  `thermostat/target-temperature` without any thermostat mode feature (a
-  mode "heat" from a voice assistant could light it).
+  `switch.*` scenes can neither light nor turn off a stove ("everything on" /
+  "everything off"). The power level is a `text/select` (P1–P5), not a
+  dimmer; the setpoint is a `thermostat/target-temperature` without any
+  thermostat mode feature (a mode "heat" from a voice assistant could light
+  it): HomeKit shows a thermostat stuck on "Heat", Google and Alexa do not
+  expose the setpoint (review M5, said in the docs).
+- **The setpoint never sends the lighting order** (review I4): but on a stove
+  already running on standby (flame out), a higher setpoint makes it start
+  again, as in the app. Said in the manifest and the docs; no stronger claim.
 - **Turning off is always allowed** (brief): no option; it does not join the
   per-stove command chain (an emergency stop never waits, lot 6 lesson); it is
-  sent during a 429/403 pause and during a stop as long as the token is valid
-  10 s more (one request; safety over politeness); its fresh read lasts 2 s
-  at most and a failed read only skips the "already off" shortcut (the safe
-  direction). It is still never sent after the 3.4 s deadline.
+  sent during a 429/403 pause and during a stop (one request; safety over
+  politeness). It is still never sent after the 3.4 s deadline.
+- **Turning off decides nothing, so it reads nothing** (review B1): `power` 0
+  is always sent (the cloud answers "Value is already 0" on a stove already
+  off), never answered "already off": that shortcut acknowledged a turn off
+  while a lighting was queued or reading, and the stove then lit.
+- **A turn off cancels a pending lighting** (review B1): a per-stove counter
+  is incremented synchronously when the turn off arrives in `setValue`; the
+  lighting takes the counter at its own arrival (before the queue) and checks
+  it before its read, after it, and synchronously right before its PUT;
+  changed, it is refused ("extinction demandée entre-temps"). A lighting PUT
+  already in flight is waited for by the turn off, until the turn off's own
+  deadline (3.4 s minus 0.3 s), then the turn off is sent whatever happened,
+  so it lands after the lighting.
+- **Turning off finds a token** (review I1): the pauses remember their source
+  (`api` or `cognito`, kept in /data). A pause of the Edilkamin API (429, or
+  403 on every stove) no longer stops the renewal timer; only a Cognito 429
+  does. When the token is valid less than 10 s, turning off renews it from the
+  refresh token within its deadline (the Cognito request bounded by the time
+  left) and sends. A 401 on a PUT renews the token at once: turning off then
+  sends again once within its deadline; the other commands are refused (try
+  again).
 - **Lighting is off by default** (`allow_power_on`, brief): refused before
   any request. When allowed: the token must be valid 60 s more (no renewal
   inside the deadline), a fresh read must say the stove is off (`power`
@@ -100,8 +128,8 @@ up to date at the end of every milestone.
   (a guess on the safe side, to check); values are strict (null, '', true,
   21.3 refused; "21,5" accepted).
 - **Power guard**: after a power command (sent or maybe sent), lighting is
-  refused and turning off never answers "already off" until a read at least
-  4 s later shows the expected state, 60 s at most. The setpoint and the
+  refused until a read at least 4 s later shows the expected state, 60 s at
+  most. The setpoint and the
   power level have no guard (absolute values, not toggles).
 - **MAC addresses typed by the user** (comma separated, 10 at most): the
   cloud has no "list my stoves" endpoint in edilkamin.py, and its discovery is
@@ -109,18 +137,30 @@ up to date at the end of every milestone.
   `format_mac`; invalid entries counted in the status. The external id is the
   MAC (12 hex digits, lower case): stable for the stove's Wi-Fi module.
   Device name "Poêle Edilkamin 3456" (end of the MAC); renamed in Gladys.
-- **Per-stove errors**: a 404, a 403, a bad or too big document marks only
-  that stove (degraded unreachable badge, last values kept); a 403 on every
-  stove of a cycle is a 30-minute pause (a WAF), so one wrong MAC never pauses
-  the others. Network, 5xx, 429 and session errors end the cycle for all.
+- **Per-stove errors** (review I2): a 404, a 403, a 5xx, a timeout, another
+  HTTP error, a bad or too big document marks only that stove (degraded
+  unreachable badge, last values kept) and the loop goes on; the cycle ends
+  "unreachable" (backoff) only when no stove answered. A 403 on every stove of
+  a cycle is a 30-minute pause (a WAF), so one wrong MAC never pauses the
+  others; with one stove only, the status asks to check its MAC (review M4).
+  Network, 429 and session errors end the cycle for all. `http` left the
+  OFFLINE set (an answer came).
 - **User name kept as typed** (trimmed, not lower-cased): Cognito user names
   may be case-sensitive; to check.
-- **Code challenges not handled**: Edilkamin accounts are not known to use
-  MFA; if Cognito asks, a `two_factor` stop with no automatic retry (each
-  sign-in would send a code), lifted by saving or the test button.
+- **Challenges not handled** (review I3): Edilkamin accounts are not known to
+  use MFA; any Cognito challenge but `NEW_PASSWORD_REQUIRED` (a code, at the
+  first step or after the password proof, or any other step) is a stop with no
+  automatic retry (each sign-in could send a code). Only the test button, or
+  new credentials, lift it; a reconnection to Gladys (which goes through
+  `configUpdated`) never does (review M1).
 - **Refused credentials**: stop with a new try after 1 h, 6 h, then every
-  24 h; at once on a configuration change or the test button. Same schedule
-  for `session_refused`, a new password asked and an unhandled challenge.
+  24 h; at once on a credentials change or the test button. Same schedule for
+  `session_refused` and a new password asked.
+- **New credentials drop the old tokens** (review M2): `start({ fresh })`
+  clears the tokens too, so another password signs in again.
+- **No English in the French statuses** (review M3): the reasons are
+  translated by error kind (`reasonOf`), with the HTTP status only; the
+  English `errorReason` stays for the logs.
 - **Tokens in /data** (as gladys-schlage): 0600, a hash of the user name,
   never the user name nor the password; another user name drops the tokens
   and the stops (a 429 pause stays). The refresh token gives control of the

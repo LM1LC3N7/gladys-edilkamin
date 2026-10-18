@@ -77,6 +77,7 @@ export function normalizeMemory(raw, now = Date.now()) {
     PAUSE_KINDS.includes(raw?.pause?.kind) && time(raw.pause.until)
       ? {
           kind: raw.pause.kind,
+          source: raw.pause.source === 'cognito' ? 'cognito' : 'api',
           until: Math.min(
             raw.pause.until,
             now + (raw.pause.kind === 'forbidden' ? TIMINGS.forbiddenPause : TIMINGS.rateLimitMax),

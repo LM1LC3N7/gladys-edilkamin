@@ -53,23 +53,30 @@ stopped.
 
 A pellet stove is a flame appliance:
 
-- **Turning off is always allowed**, without an option. It never waits behind
-  another command of the same stove, and it is also sent during a pause asked
-  by Edilkamin, as long as the session is valid.
+- **Turning off is always allowed**, without an option, and always sent (on
+  a stove already off, it changes nothing). It never waits behind another
+  command of the same stove, but for a lighting already on its way, so it
+  lands after it. It is also sent during a pause asked by Edilkamin, and
+  renews an expired session by itself within its deadline.
+- A lighting waiting or in progress is **cancelled** when a turn off arrives
+  meanwhile ("turn off asked meanwhile").
 - **Lighting** is off by default: turn on **Allow lighting the stoves from
   Gladys** to allow it. A scene or a dashboard can then light a flame in your
   home while nobody is there: check the stove, its glass and its surroundings
   first.
 - **There is no switch**: the "Lit" state is read only, and lighting and
-  turning off are buttons. An "everything on" of a voice assistant (Google
-  Home, Alexa, HomeKit) or of a scene can never light the stove.
+  turning off are buttons. An "everything on" or "everything off" of a scene
+  never touches the stove, and voice assistants can neither light it nor turn
+  it off. HomeKit shows the setpoint as a thermostat stuck on "Heat"; Google
+  Home and Alexa do not expose the setpoint.
 - **The setpoint and the power level** are off by default (**Allow changing
-  the setpoint and the power level from Gladys**). They never light the
-  stove.
-- Before each command, the integration **reads the stove again** from the
-  cloud. For lighting, the setpoint and the power level, the command is
-  refused when that read fails or lacks the value. For turning off, a failed
-  read stops nothing: the stove is turned off anyway.
+  the setpoint and the power level from Gladys**). They never send the
+  lighting order; on a stove already running but on standby (flame out), a
+  higher setpoint makes it start again, as in the app.
+- Before lighting, the setpoint and the power level, the integration **reads
+  the stove again** from the cloud: the command is refused when that read
+  fails or lacks the value. Turning off reads nothing: it has nothing to
+  decide.
 - The commands of one stove run **one at a time** (but turning off).
 - A command that cannot be sent within **3.5 seconds** of its arrival is
   refused: Gladys shows a failure after 5 seconds, and nothing must happen
@@ -109,16 +116,19 @@ stove, plus three reads within the minute after a command.
 - **Password refused** (or account not confirmed, reset required): the
   integration stops; one new try after 1 h, 6 h, then every 24 h, or at once
   when you save the configuration or click **Test the connection**.
-- **Verification code asked**: not handled. The integration stops and never
-  signs in again by itself (each sign-in would send a code).
+- **Verification code, or any other sign-in step** (but a new password): not
+  handled. The integration stops and never signs in again by itself (each
+  sign-in could send a code); click **Test the connection**, or change the
+  user name or the password.
 - **Session refused right after a new sign-in**: new try after 1 h, 6 h, then
   every 24 h.
 - **Edilkamin asks to slow down** (429, or too many sign-ins): a pause of at
   least 1 minute (Retry-After when given, 6 h at most), for every path but
   turning off, kept across restarts.
-- **HTTP 403 on every stove**: a 30-minute pause. A 403 or a 404 on one stove
-  only marks that stove ("unreachable" badge).
-- **Edilkamin unreachable**: new try after 1, 2, 5, 10, then every 15 minutes,
+- **HTTP 403 on every stove**: a 30-minute pause (with one stove only, check
+  its MAC address). A 403, a 404, a 5xx or a timeout on one stove only marks
+  that stove ("unreachable" badge); the others are still read.
+- **Edilkamin unreachable** (no stove answered): new try after 1, 2, 5, 10, then every 15 minutes,
   never faster than the refresh interval.
 
 ## Limits

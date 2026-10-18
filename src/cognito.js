@@ -49,8 +49,23 @@ export class CognitoClient {
     this.timeout = undefined;
   }
 
-  /** One Cognito call; rejects an EdilkaminError of the `kind` the caller chose for refusals. */
-  async call(target, payload, { refusal = 'refused' } = {}) {
+  /**
+   * One Cognito call; rejects an EdilkaminError of the `kind` the caller
+   * chose for refusals, marked `source: 'cognito'` (a 429 of Cognito pauses
+   * the renewals, one of the Edilkamin API does not). `timeout`: this call only.
+   */
+  async call(target, payload, options = {}) {
+    try {
+      return await this.request(target, payload, options);
+    } catch (err) {
+      if (err instanceof EdilkaminError) {
+        err.source = 'cognito';
+      }
+      throw err;
+    }
+  }
+
+  async request(target, payload, { refusal = 'refused', timeout } = {}) {
     const body = JSON.stringify(payload);
     const answer = await this.transport(this.url, {
       method: 'POST',
@@ -60,7 +75,7 @@ export class CognitoClient {
         'Content-Length': Buffer.byteLength(body),
       },
       body,
-      timeout: this.timeout ?? TIMINGS.requestTimeout,
+      timeout: timeout ?? this.timeout ?? TIMINGS.requestTimeout,
     });
     let json;
     try {
@@ -132,7 +147,14 @@ export class CognitoClient {
       ClientId: COGNITO.clientId,
       AuthParameters: { USERNAME: username, SRP_A: ephemeral.srpA },
     });
-    if (start.ChallengeName !== 'PASSWORD_VERIFIER' || !start.ChallengeParameters) {
+    if (start.AuthenticationResult) {
+      return this.tokensOf(start.AuthenticationResult);
+    }
+    if (typeof start.ChallengeName === 'string' && start.ChallengeName !== 'PASSWORD_VERIFIER') {
+      // Another first step (custom challenge, MFA…): a stop, never a loop.
+      return this.unexpectedChallenge(start.ChallengeName);
+    }
+    if (!start.ChallengeParameters) {
       throw new EdilkaminError('bad_response', 'Cognito did not ask for the password proof');
     }
     const challenge = start.ChallengeParameters;
@@ -162,7 +184,16 @@ export class CognitoClient {
     if (answer.AuthenticationResult) {
       return this.tokensOf(answer.AuthenticationResult);
     }
-    const name = String(answer.ChallengeName ?? '');
+    return this.unexpectedChallenge(answer.ChallengeName);
+  }
+
+  /**
+   * Any challenge but the password proof: a code (`two_factor`), a new
+   * password, or another step (`unsupported_challenge`). The app stops on all
+   * of them; only `new_password` is tried again by itself (spaced).
+   */
+  unexpectedChallenge(challengeName) {
+    const name = String(challengeName ?? '');
     if (CODE_CHALLENGES.includes(name)) {
       throw new EdilkaminError('two_factor', 'Cognito asks for a verification code', {
         challenge: name,
@@ -179,7 +210,7 @@ export class CognitoClient {
   }
 
   /** New tokens from the refresh token, without the password. */
-  async refresh(tokens) {
+  async refresh(tokens, { timeout } = {}) {
     const answer = await this.call(
       'InitiateAuth',
       {
@@ -187,7 +218,7 @@ export class CognitoClient {
         ClientId: COGNITO.clientId,
         AuthParameters: { REFRESH_TOKEN: tokens.refreshToken },
       },
-      { refusal: 'refresh_refused' },
+      { refusal: 'refresh_refused', timeout },
     );
     return this.tokensOf(answer.AuthenticationResult, tokens.refreshToken);
   }
