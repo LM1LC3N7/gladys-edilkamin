@@ -380,13 +380,14 @@ test('a turn off waits for a lighting request in flight, then lands after it', a
   assert.equal(server.stoves[MACS.living].power, 0);
 });
 
-test('a lighting request that never ends: the turn off is sent anyway by its deadline', async (t) => {
+test('a lighting the cloud handles after 3.5 s, past the turn off: turned off again, ends off', async (t) => {
   const { gladys, server } = await setup(t, { config: allowAll });
   const gate = hold(server, putOf('power'));
-  press(gladys, MACS.living, 'power-on');
+  const on = press(gladys, MACS.living, 'power-on');
   await settle();
   const off = press(gladys, MACS.living, 'power-off');
   await settle();
+  // The turn off waits for the lighting until its own deadline, then goes.
   t.mock.timers.tick(3_200);
   await settle();
   assert.equal((await off).success, true);
@@ -394,9 +395,84 @@ test('a lighting request that never ends: the turn off is sent anyway by its dea
     server.commands().map((c) => c.value),
     [1, 0],
   );
+  assert.equal(server.stoves[MACS.living].power, 0);
+  // The cloud applies the lighting last, 3.6 s after it was sent.
+  t.mock.timers.tick(400);
   gate.release();
+  await on;
+  await settle();
+  assert.deepEqual(
+    server.commands().map((c) => c.value),
+    [1, 0, 0],
+    'turned off once more after the lighting',
+  );
+  assert.equal(server.stoves[MACS.living].power, 0);
 });
 
+test('a lighting that ends before the turn off leaves: no second turn off', async (t) => {
+  const { gladys, server } = await setup(t, { config: allowAll });
+  const gate = hold(server, putOf('power'));
+  const on = press(gladys, MACS.living, 'power-on');
+  await settle();
+  const off = press(gladys, MACS.living, 'power-off');
+  await settle();
+  gate.release();
+  await on;
+  await off;
+  await settle();
+  assert.deepEqual(
+    server.commands().map((c) => c.value),
+    [1, 0],
+  );
+});
+
+test('turning off: a failed renewal still sends with a token that lasts until the answer', async (t) => {
+  const { gladys, server, app } = await setup(t);
+  app.client.tokens = { ...app.client.tokens, expiresAt: Date.now() + 8 * SECOND };
+  const refreshes = server.refreshes().length;
+  server.queue.push({ match: (r) => r.flow === 'REFRESH_TOKEN_AUTH', status: 500, body: {} });
+  const off = await press(gladys, MACS.cabin, 'power-off');
+  assert.equal(off.success, true, off.error);
+  assert.equal(server.refreshes().length, refreshes + 1);
+  assert.equal(server.stoves[MACS.cabin].power, 0);
+});
+
+test('turning off during a Cognito pause: one renewal is still tried, then sent', async (t) => {
+  const { gladys, server, app } = await setup(t);
+  app.pauseKind = 'rate';
+  app.pauseSource = 'cognito';
+  app.pausedUntil = Date.now() + HOUR;
+  app.client.tokens = { ...app.client.tokens, expiresAt: Date.now() + SECOND };
+  const refreshes = server.refreshes().length;
+  const off = await press(gladys, MACS.cabin, 'power-off');
+  assert.equal(off.success, true, off.error);
+  assert.equal(server.refreshes().length, refreshes + 1, 'one renewal only');
+  assert.equal(server.stoves[MACS.cabin].power, 0);
+});
+
+test('turning off with a refused refresh token: refused without "try again", then a new sign-in', async (t) => {
+  const { gladys, server, app } = await setup(t);
+  server.revoke();
+  app.client.tokens = { ...app.client.tokens, expiresAt: Date.now() + SECOND };
+  const off = await press(gladys, MACS.cabin, 'power-off');
+  assert.equal(off.success, false);
+  assert.doesNotMatch(off.error, /réessayez/);
+  assert.match(off.error, /n'a pas pu être renouvelée : extinction non envoyée/);
+  await settle();
+  assert.equal(server.srpStarts().length, 2, 'the next read signs in again at once');
+  const again = await press(gladys, MACS.cabin, 'power-off');
+  assert.equal(again.success, true, again.error);
+  assert.equal(server.stoves[MACS.cabin].power, 0);
+});
+
+test('the status says "its badge" for one stove', async (t) => {
+  const server = fakeEdilkamin();
+  const { gladys, advance } = await setup(t, { server });
+  delete server.stoves[MACS.cabin];
+  await advance(MINUTE);
+  assert.match(message(gladys).fr, /\(voir son badge\)/);
+  assert.match(message(gladys).en, /\(see its badge\)/);
+});
 test('a turn off 2 h into a 6 h pause of the API: sent at the first press', async (t) => {
   const { gladys, server, advance } = await setup(t);
   server.queue.push({

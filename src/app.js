@@ -148,6 +148,8 @@ export class EdilkaminApp {
     this.offCounts = new Map();
     /** mac -> the lighting request in flight (settles, never rejects). */
     this.lightings = new Map();
+    /** mac -> how many turn off requests left (a lighting in flight compares it). */
+    this.offSends = new Map();
     /** 'api' | 'cognito': where the current 429 pause comes from. */
     this.pauseSource = undefined;
     this.lastStatus = undefined;
@@ -1042,7 +1044,10 @@ export class EdilkaminApp {
     if (!this.config.macs.includes(mac)) {
       throw this.refusal(T.denied.unknownDevice);
     }
+    let refreshed = false;
     if (!this.client.tokenValidFor(TIMINGS.offTokenValidity)) {
+      // One renewal at most per turn off (even during a Cognito pause).
+      refreshed = true;
       await this.refreshWithin(receivedAt);
     }
     const lighting = this.lightings.get(mac);
@@ -1053,7 +1058,7 @@ export class EdilkaminApp {
     await this.send(mac, COMMANDS.POWER, GLADYS.OFF, receivedAt, {
       guard: true,
       expected: false,
-      renewOn401: true,
+      renewOn401: !refreshed,
     });
     this.logger.info(`Edilkamin stove ${short(mac)}: turning off sent`);
   }
@@ -1061,16 +1066,25 @@ export class EdilkaminApp {
   /**
    * A new token from the refresh token, within the deadline of the command
    * that arrived at `receivedAt` (the Cognito request is bounded by the time
-   * left); a refusal when it cannot be had.
+   * left). Tried once, even during a Cognito pause (turning off only). When it
+   * fails but the current token still lasts until the answer of the command
+   * (4.6 s), the command goes with it; otherwise a refusal that does not ask
+   * to try again (the next read signs in again when the refresh token was
+   * refused).
    */
   async refreshWithin(receivedAt) {
     const budget = receivedAt + TIMINGS.commandStartBy - TIMINGS.minRequestTimeout - this.now();
-    if (!this.client.tokens?.refreshToken || this.cognitoPaused) {
-      throw this.refusal(
-        this.blocked ? T.denied.stopped : this.cognitoPaused ? T.denied.paused : T.denied.session,
-      );
+    const fallback = () => this.client.tokenValidFor(TIMINGS.commandAnswerBy);
+    if (!this.client.tokens?.refreshToken) {
+      if (fallback()) {
+        return;
+      }
+      throw this.refusal(this.blocked ? T.denied.stopped : T.denied.sessionLost);
     }
     if (budget < TIMINGS.minRequestTimeout) {
+      if (fallback()) {
+        return;
+      }
       throw this.refusal(T.denied.late);
     }
     try {
@@ -1084,7 +1098,14 @@ export class EdilkaminApp {
         await this.persist();
       }
       this.logger.info(`Edilkamin: no new token within the command (${errorReason(err)})`);
-      throw this.refusal(T.denied.session, err);
+      if (fallback()) {
+        return;
+      }
+      if (!this.client.tokens?.refreshToken) {
+        // The refresh token was refused: the next read signs in again at once.
+        this.tick().catch((e) => this.logger.warn(`Edilkamin refresh failed: ${e.message}`));
+      }
+      throw this.refusal(T.denied.sessionLost, err);
     }
   }
 
@@ -1139,11 +1160,18 @@ export class EdilkaminApp {
     receivedAt,
     { guard, expected = value === GLADYS.ON, lighting = false, renewOn401 = false },
   ) {
+    const turningOff = name === COMMANDS.POWER && value === GLADYS.OFF;
     try {
+      if (turningOff) {
+        // Counted when the turn off leaves: a lighting still in flight sees it.
+        this.offSends.set(mac, (this.offSends.get(mac) ?? 0) + 1);
+      }
+      const offsBefore = this.offSends.get(mac) ?? 0;
       const request = this.client.command(mac, name, value, {
         // Sent 3.4 s after the arrival at the latest; answered by 4.6 s after it.
         startBy: receivedAt + TIMINGS.commandStartBy,
-        validity: TIMINGS.offTokenValidity,
+        // The token must last until the answer (4.6 s): renewals are done before.
+        validity: TIMINGS.commandAnswerBy,
         timeout: () =>
           Math.max(TIMINGS.minRequestTimeout, receivedAt + TIMINGS.commandAnswerBy - this.now()),
       });
@@ -1153,6 +1181,20 @@ export class EdilkaminApp {
         settled.then(() => {
           if (this.lightings.get(mac) === settled) {
             this.lightings.delete(mac);
+          }
+          if ((this.offSends.get(mac) ?? 0) !== offsBefore) {
+            // A turn off left while this lighting was still in flight: the cloud
+            // may apply the lighting last. Turned off once more, after it.
+            this.logger.warn(`Edilkamin stove ${short(mac)}: turning off again after a lighting`);
+            this.send(mac, COMMANDS.POWER, GLADYS.OFF, this.now(), {
+              guard: true,
+              expected: false,
+              renewOn401: true,
+            }).catch((err) =>
+              this.logger.warn(
+                `Edilkamin stove ${short(mac)}: turning off again failed (${errorReason(err.cause ?? err)})`,
+              ),
+            );
           }
         });
       }

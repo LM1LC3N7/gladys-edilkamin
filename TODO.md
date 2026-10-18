@@ -127,7 +127,15 @@ up to date at the end of every milestone.
   memory); "already set" sends nothing. Setpoint accepted 12–30 °C by 0.5
   (a guess on the safe side, to check); values are strict (null, '', true,
   21.3 refused; "21,5" accepted).
-- **Power guard**: after a power command (sent or maybe sent), lighting is
+- **Second turn off after a late lighting** (approval note 1): a turn off
+  that left while a lighting PUT was still in flight is sent once more when
+  that lighting settles (a counter of turn off requests per stove), so the
+  stove ends off even if the cloud applies the lighting last.
+- **Turning off without a fresh token** (approval note 2): one renewal at
+  most per turn off, tried even during a Cognito pause; when it fails, the
+  turn off still goes with the current token if it lasts until the answer
+  (4.6 s); otherwise a refusal that does not say "try again", and a refused
+  refresh token makes the next read sign in at once.- **Power guard**: after a power command (sent or maybe sent), lighting is
   refused until a read at least 4 s later shows the expected state, 60 s at
   most. The setpoint and the
   power level have no guard (absolute values, not toggles).

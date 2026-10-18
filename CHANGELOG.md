@@ -53,5 +53,13 @@ the notes of the version's GitHub Release.
 - French statuses no longer hold English reasons; with one stove, a 403 asks
   to check its MAC address; the docs say the setpoint can restart a stove on
   standby, and that voice assistants can neither light nor turn off a stove.
+- A turn off that left while a lighting request was still in flight is sent
+  once more when that lighting ends, so the stove ends off even when the cloud
+  handles the lighting last.
+- Turning off still goes with the current token when its renewal fails but
+  the token lasts until the answer; it tries one renewal even during a
+  Cognito pause; a refused refresh token no longer shows "try again" and
+  triggers a new sign-in.
+- "Its badge" in the status when one stove could not be read.
 
 [Unreleased]: https://github.com/LM1LC3N7/gladys-edilkamin/commits/main

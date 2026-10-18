@@ -80,8 +80,8 @@ export const T = {
     const lost =
       missing > 0
         ? both(
-            ` ${missing} stove${missing > 1 ? 's' : ''} could not be read (see their badge).`,
-            ` ${missing} poêle${missing > 1 ? 's' : ''} n'${missing > 1 ? 'ont' : 'a'} pas pu être lu${missing > 1 ? 's' : ''} (voir leur badge).`,
+            ` ${missing} stove${missing > 1 ? 's' : ''} could not be read (see ${missing > 1 ? 'their' : 'its'} badge).`,
+            ` ${missing} poêle${missing > 1 ? 's' : ''} n'${missing > 1 ? 'ont' : 'a'} pas pu être lu${missing > 1 ? 's' : ''} (voir ${missing > 1 ? 'leur' : 'son'} badge).`,
           )
         : both('', '');
     return both(
@@ -212,6 +212,10 @@ export const T = {
     unknown: both(
       'The stove did not report whether it is on: command refused.',
       "Le poêle n'a pas indiqué s'il est allumé : commande refusée.",
+    ),
+    sessionLost: both(
+      'The Edilkamin session could not be renewed: turning off not sent. The integration signs in again by itself; see its status.',
+      "La session Edilkamin n'a pas pu être renouvelée : extinction non envoyée. L'intégration se reconnecte d'elle-même ; voir son état.",
     ),
     offMeanwhile: both(
       'A turn off of this stove was asked meanwhile: lighting refused.',
