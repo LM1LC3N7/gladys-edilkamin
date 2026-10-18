@@ -10,6 +10,8 @@ the notes of the version's GitHub Release.
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-10-18
+
 ### Added
 
 - Edilkamin "The Mind" pellet stoves, through the Edilkamin cloud (unofficial
@@ -62,4 +64,5 @@ the notes of the version's GitHub Release.
   triggers a new sign-in.
 - "Its badge" in the status when one stove could not be read.
 
-[Unreleased]: https://github.com/LM1LC3N7/gladys-edilkamin/commits/main
+[Unreleased]: https://github.com/LM1LC3N7/gladys-edilkamin/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/LM1LC3N7/gladys-edilkamin/releases/tag/v0.1.1
