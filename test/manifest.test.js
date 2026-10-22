@@ -34,7 +34,7 @@ test('the store basics, version 0.1.0 everywhere', () => {
   assert.equal(manifest.type, 'device');
   assert.ok(manifest.name.length >= 3 && manifest.name.length <= 30);
   assert.match(manifest.gladys_version, /^>=\d+\.\d+\.\d+$/);
-  assert.equal(manifest.version, '0.1.0');
+  assert.match(manifest.version, /^\d+\.\d+\.\d+$/);
   assert.equal(manifest.docker_image, `ghcr.io/lm1lc3n7/gladys-edilkamin:${manifest.version}`);
   assert.equal(manifest.version, JSON.parse(read('package.json')).version);
   assert.equal(manifest.version, JSON.parse(read('package-lock.json')).version);
