@@ -207,3 +207,7 @@ alarm_reset` is not used (its meaning is unclear).
   notice) and pycognito (Apache-2.0); both copied into the image.
 - **The app's Cognito pool and client id** are in `src/constants.js`, as in
   edilkamin.py: public constants of The Mind app, not secrets of the user.
+
+## Next patch
+
+- Migration review minors: see `_lots/migration-reviews/w15-gladys-edilkamin-r1.md`.
