@@ -12,6 +12,7 @@ import {
   DEVICE_FEATURE_TYPES as TYPES,
 } from '@gladysassistant/integration-sdk';
 import { FEATURES, ROLES, buildDevice, parseFeatureId, rolesOf, statesOf } from '../src/devices.js';
+import { assertCoreDevice } from './helpers/coreFeature.js';
 
 /** DEVICE_FEATURE_UNITS_BY_CATEGORY of the core, for the categories used here. */
 const UNITS_BY_CATEGORY = {
@@ -78,4 +79,15 @@ test('states: unknown values are not published', () => {
     'en',
   );
   assert.deepEqual(states, [{ role: 'last-alarm', text: 'No alarm' }]);
+});
+
+test('every feature has a numeric min and max and the other core fields, in both languages', () => {
+  const stove = { mac: 'a8032a123456', fans: [1, 2, 3], fansNumber: 3, alarms: { count: 0 } };
+  let features = 0;
+  for (const language of ['en', 'fr']) {
+    const device = buildDevice(gladys, stove, language, new Set());
+    features += assertCoreDevice(device, language);
+    assert.equal(device.features.length, ROLES.length, language);
+  }
+  assert.equal(features, 2 * ROLES.length);
 });

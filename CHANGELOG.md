@@ -10,6 +10,11 @@ the notes of the version's GitHub Release.
 
 ## [Unreleased]
 
+### Changed
+
+- Integration SDK 0.16.1 (no change for the devices); the test runner stops a
+  hanging test after 60 s.
+
 ## [0.1.2] - 2026-10-23
 
 ## [0.1.1] - 2026-10-18
