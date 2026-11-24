@@ -10,6 +10,8 @@ the notes of the version's GitHub Release.
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-11-24
+
 ### Changed
 
 - Integration SDK 0.16.1 (no change for the devices); the test runner stops a
@@ -71,6 +73,7 @@ the notes of the version's GitHub Release.
   triggers a new sign-in.
 - "Its badge" in the status when one stove could not be read.
 
-[Unreleased]: https://github.com/LM1LC3N7/gladys-edilkamin/compare/v0.1.2...HEAD
+[Unreleased]: https://github.com/LM1LC3N7/gladys-edilkamin/compare/v0.1.3...HEAD
+[0.1.3]: https://github.com/LM1LC3N7/gladys-edilkamin/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/LM1LC3N7/gladys-edilkamin/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/LM1LC3N7/gladys-edilkamin/releases/tag/v0.1.1
